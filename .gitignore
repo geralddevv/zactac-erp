@@ -4,3 +4,7 @@ node_modules/
 cookies.txt
 images/
 media/
+# Database dumps -- scripts/deploy-task-notifications.js writes mongodump
+# output here by default. Never commit one: it is the whole database,
+# employee records and all.
+backups/

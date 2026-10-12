@@ -94,16 +94,18 @@ What a task now carries (`models/miscellaneous/task_model.js`): `assignedTo` **i
 |---|---|---|---|
 | assigned (create) / reassigned (edit) | new assignee | `task.assigned` | yes |
 | taken off someone | previous assignee | `task.unassigned` | yes |
-| marked done | creator | `task.done` | yes |
-| status changed by someone else | assignee | `task.updated` | yes |
+| marked done | creator | `task.done` | code is in place but **currently unreachable**: only the creator may close a task, and `notify()` drops the actor. Kept for the day `canSetStatus` widens |
+| status changed by someone else | assignee | `task.updated` | yes — this is how the assignee learns their work was signed off |
 | due in 24 h / overdue | assignee (+ creator when overdue) | `task.due` / `task.overdue`, `dedupeKey` per day | yes |
 | comment added | assignee + creator + prior commenters | `task.comment` | **no — tasks have no comments yet.** Add the feature first, then one `notify()` call in its POST handler |
 
 Rules the handlers follow:
 
+- **Only whoever assigned a task may close it**, and **a task is private to its creator and its assignee — administrators included** (`taskVisibilityFilter()`; there is no role that reads the whole collection). So the assignee has no status power at all (`canSetStatus` = `canEdit`), and the assignee learns their work was signed off through `task.updated`. Task titles are deliberately absent from the audit log, since that *is* readable by proprietor/admin/hod. If you ever restore the assignee's Mark Complete, `task.done` is the one notification path to re-check.
 - **Save first, notify after.** Every `notify()` call sits after the write it reports.
 - **Assigning to yourself rings nothing** (`actorId` is dropped by `notify()`).
 - **A task kept for yourself notifies nobody.** The New Task dialog's "Who is this for?" switch posts `assignMode: "send" | "self"`; in `self` mode the task is assigned to the creator (a posted `assignedTo` is ignored, not trusted) and the `task.assigned` call is skipped outright rather than left to the `actorId` guard. Due/overdue reminders still reach them — it is their own reminder. There is no flag on the document: a kept reminder is just a task you assigned to yourself, so nothing downstream needs a special case.
+- **…and neither does the person it is *about*.** In `self` mode the dialog's employee picker is relabelled "About (optional)" and its value is posted as `aboutEmployee`, stored in `Task.aboutEmployee` / `aboutEmployeeName`. That field is display context: no visibility filter and no `notify()` call anywhere reads it, so naming somebody there gives them nothing. If you add a producer, **never** address a notification to `aboutEmployee` — the whole point is that the task was kept rather than sent.
 - **Editing a title, label, due date or client notifies nobody** — only a change of assignee or of status does.
 - A reassignment tells **both** sides: the new assignee (`task.assigned`) and the person it was taken off (`task.unassigned`).
 - The "someone else changed your task's status" row is skipped when that same person was just told they were given the task, so a single edit never produces two rows for one person.

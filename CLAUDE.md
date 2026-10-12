@@ -16,6 +16,7 @@ node scripts/backfill-prodbinding-signatures.js
 node scripts/backfill-prodbinding-calc.js
 node scripts/backfill-employee-nickname.js       # empNickName = first word of empName
 node scripts/backfill-task-assignee.js           # Task assignedToName / createdById / createdByName (+ completedAt) from the ids already on the row
+node scripts/deploy-task-notifications.js        # whole deploy of the task-assignment/bell release: backup, pull, the notification index repair, restart, health check, backfill (dry-run; --apply)
 node scripts/backfill-facestock-signatures.js    # repair Facestock Master dup protection (also drops old vendor+SKU index)
 node scripts/backfill-adhesive-signatures.js     # same, Adhesive Master
 node scripts/backfill-release-signatures.js      # repair Release Master dup protection
@@ -131,9 +132,22 @@ Serve with `sendAsset(res, asset, { thumb })` after your own auth check (honours
 - Notification text is user-typed: the panel builds rows with `textContent`, never `innerHTML`. Row reads/polls are kept out of the audit log (`SKIP_PREFIXES` in `middleware/auditLogger.js`).
 - The router is mounted **ahead of every role-gated router** (like `machineRoutes`), since the bell is in the layout of every page.
 
-**A new task is either sent or kept.** The New Task dialog asks "Who is this for?" first, because it decides what the rest of the form means: **Send to employee** (default) assigns it to the picked employee and rings their bell; **Keep for myself** makes it the creator's own task — the Assigned Employee field is hidden, `assignedTo` is the creator, and nobody is notified (due reminders then ring the creator's own bell, which is the point of a reminder). `assignMode` is re-decided server-side in `POST /tasks`: in `self` mode a posted `assignedTo` is **ignored outright**, so a doctored request can't put a silent task on someone else. No flag on the document — a kept reminder is simply a task you assigned to yourself, so no query, scope or notification rule needs a special case. The button is disabled for logins with no employee record (nothing for the task to belong to).
+**A new task is either sent or kept.** The New Task dialog asks "Who is this for?" first, because it decides what the **one employee picker** below it means:
 
-**Tasks** (`/<slug>/tasks`, isolated DB) are the first producer, and are now delegated work rather than a private to-do list. `Task.assignedTo` **is** the assignee id — the same `Employee._id` a session reduces to — with `assignedToName` as a copy beside it (no cross-database join to lean on); `createdBy` stays the creator's `empId` code (the Daybook keys on it) alongside `createdById`/`createdByName`. The page has three server-enforced scopes — **Assigned to me** (default) / **Created by me** / **All** (proprietor, admin, hod only) — plus `GET /tasks/mine` (JSON: open / overdue / done). Who may change what: the creator (or an all-scope role) everything including delete; the **assignee status only**; anyone else gets "not found", so an id gives nothing away. The Daybook draws on both (created by me **or** assigned to me). Assignment only works end to end for the roles `fairdeskRoute` is mounted for — see the note in `NOTIFICATIONS.md` §6.
+| | Send to employee (default) | Keep for myself |
+|---|---|---|
+| picker label | Assigned Employee (required) | **About (optional)** |
+| `assignedTo` | the picked employee | **the creator, always** |
+| the pick is stored as | the assignee | `aboutEmployee` + `aboutEmployeeName` |
+| that person's bell / list | rings / shows | **nothing / never** |
+
+`assignMode` is re-decided server-side in `POST /tasks`: in `self` mode a posted `assignedTo` is **ignored outright**, so a doctored request can't put a silent task on someone else, and the pick travels as `aboutEmployee` so the two can't be confused. A kept reminder needs **no flag on the document** — it is simply a task you assigned to yourself, so no scope, Daybook or notification rule needs a special case, and due reminders ring the creator's own bell (the point of a reminder). The mode button is disabled for logins with no employee record (nothing for the task to belong to).
+
+**`aboutEmployee` is context, never authority.** No visibility query and no `notify()` call reads it, so a reminder kept *about* somebody can never appear in their list or ring their bell — that holds structurally, not by remembering to check. It takes a free-text "Others" name like the assignee does, shows in the table's **About** column, and the Edit dialog offers it only for a kept reminder (`assignedTo` is its own creator), where it can be changed or cleared. A sent task never carries one.
+
+**A task is private to exactly two people: whoever set it and whoever it was given to.** Nobody else can read it, open it, edit it or pull it into their Daybook — not another employee and **not an administrator**: there is deliberately no role anywhere that can read the task collection through this app (an earlier revision gave proprietor/admin/hod an "All" scope; it was removed). One function, `taskVisibilityFilter()` in `routes/fairdesk_route.js`, is the rule, and **every** task read goes through it, so there is a single place to audit. A task that isn't yours answers `404 Task not found` (an assignee instead gets a truthful 403 naming who to ask). Task titles are also kept **out of the audit log** — `/audit/view` is open to proprietor/admin/hod, so audit entries record `Created and assigned a task (<id>)` and never the text; the id discloses nothing, because reading the record still goes through the filter. If an oversight view is ever genuinely wanted, add it as its own route with its own audit trail rather than widening the filter.
+
+**Tasks** (`/<slug>/tasks`, isolated DB) are the first producer, and are now delegated work rather than a private to-do list. `Task.assignedTo` **is** the assignee id — the same `Employee._id` a session reduces to — with `assignedToName` as a copy beside it (no cross-database join to lean on); `createdBy` stays the creator's `empId` code (the Daybook keys on it) alongside `createdById`/`createdByName`. The page has three server-enforced scopes — **Assigned to me** (default) / **Created by me** / **All** (proprietor, admin, hod only) — plus `GET /tasks/mine` (JSON: open / overdue / done). Who may change what: **the creator everything, including marking it done**; the assignee **nothing** — work assigned to you is yours to do, not yours to sign off, so you get no Mark Complete / Reopen (`canSetStatus`), and the row instead reads "<creator> closes". The assignee is told so in words (403 naming who to ask); anyone else gets "not found", so an id gives nothing away. Both the Tasks page and the Daybook gate the button on the same server-computed `perms`, and `PUT /api/tasks/:id` re-checks it. The Daybook draws on both (created by me **or** assigned to me). Assignment only works end to end for the roles `fairdeskRoute` is mounted for — see the note in `NOTIFICATIONS.md` §6.
 
 ### Front-end conventions
 
@@ -324,6 +338,23 @@ Downstream: no layout, no client (advance-only batches already lack a client). A
 Cure time by **facestock family** from the Deckle's `createdAt`: **CHROMO 6 h, PP 8 h**, other 6 h (`DEFAULT_CURING_HOURS`); `CURING_HOURS_BY_FAMILY` in `routes/system/slitting.js`. A build whose **every** adhesive layer is hot melt (`HOTMELT`/`HOT MELT`) has no curing; hot melt + waterbase double still cures. Label Stock `family`, `facestock.facestockFamily` (and `facestock2` on DOUBLE FACESTOCK) are all read; longest wait wins.
 
 Allocation is **not** gated; the operator's run **is** (scan, Start, Stop on the slitting job card refuse an uncured Deckle; queues show the countdown). Any query whose reels go to `deckleCuring()` must populate `CURING_MATERIAL_FIELDS`, or every Deckle quietly falls back to 6 h.
+
+### Slitting Deckles are counted by the knife layout, not by the card or product
+
+**One `SlittingJobCard` is one Deckle**, so "5 Deckles cut 210 + 210 + 210" is five cards from one Allocate submit — and each Deckle slit takes its card off the queue (it auto-completes at its own Stop). Counting per card therefore said nothing useful ("Deckles: 1, done: 0"), and counting per card *batch* restarted at 1 every time fresh work landed on a setting already up on the machine.
+
+A **layout run** is every Deckle — slit or still to run — at one knife layout on one machine. `buildLayoutRuns()` (`routes/system/slitting.js`) stamps each open card with its place in it, and **every queue reads that**, so the floor and the office name the same Deckle by the same number:
+
+    5 Deckles of 210+210+210, 2 slit   ->  Deckles 2 / 5, rows 3, 4, 5
+    5 more of 210+210+210 allocated    ->  Deckles 2 / 10, rows 3, 4, 5, 6 ... 10
+
+- **Product Code is not part of the key** — the knife setting is the same whatever is being cut on it, so a `C014AC` job joins a `C001WB` one at the same widths (the group names both). The pool key is machine + layout, and the machine queue, the queue list and the operator app all group on the server's `layoutKey`.
+- **Positions are allocation order and never move**, so a Deckle slit early keeps its number and the gap shows (rows `1, 3, 4 …` — #2 is slit and its card is gone).
+- **Finished cards still count**, which is what makes the denominator grow instead of resetting. They are off the queue, so a group lists fewer children than its total; `left = total − done` reconciles it.
+- **The run ends where the layout ran dry.** The chain is walked back from the newest card while each card's predecessor was still open when that card was allocated; the first break starts a fresh run at 1. An open card is always inside the last chain (it has been open ever since it was allocated), so this is what "until the layout is finished" means. `LAYOUT_RUN_LOOKBACK_DAYS` (60) only bounds the query for finished cards — open ones are never windowed out.
+- Carried as `layoutRunTotal` / `layoutRunDone` / `layoutRunPlannedRolls` / `layoutRunProducedRolls` on each queue row, `pos` on each entry of `deckles[]`, and `layoutRun { from, total, done }` + per-row `runPos` from `buildSlittingCard()`. **Never count a card's own `deckleCount`/`deckleDone` for this** — they only ever describe one card.
+- Shown on `/sachiko/machine/:id/queue` — the group row's **Deckles** cell carries the run as `done / total` (Slice likewise, `made / planned`), and the rows inside it number the Deckles **bare** (`3`, `4`, `5`), the total being on the group row already. Also the machine queue list, the operator queue, both slitting job cards, and the operator app's queue tile + Select Job dialog.
+- `layoutGroupsOf()` / `layoutKeyOf()` build both the layout summary and the pool key, so the grouping and the numbering cannot drift apart.
 
 ### Machine queue: how far the allotted material gets
 

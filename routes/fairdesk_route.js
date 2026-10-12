@@ -916,12 +916,21 @@ router.post("/form/user", requireAuth, createLimiter, async (req, res) => {
    anyone's bucket — which is what kept this data private before and still does.
 
    Who may change what (enforced in the PUT/DELETE handlers):
-     creator, or a role with "all" scope   everything, delete included
-     assignee                              status only — it is their work
-     anyone else                           nothing, answered as "not found"
-                                           so a task id gives nothing away */
-const TASK_SCOPES = ["mine", "created", "all"];
-const TASK_ALL_SCOPE_ROLES = ["proprietor", "admin", "hod"];
+     creator    everything, delete included, and marking it done
+     assignee   nothing — the work is theirs to do, not to sign off
+     anyone else  nothing, and the task is answered as "not found"
+
+   A TASK IS PRIVATE TO TWO PEOPLE: the person who set it and the person it
+   was given to. Nobody else sees it, reads it or touches it — not another
+   employee, and NOT an administrator either. Task text can be commercially or
+   personally confidential, so there is deliberately no role, anywhere, that
+   can read the whole collection through this app; an earlier revision gave
+   proprietor/admin/hod exactly that and it has been removed.
+
+   The rule is one function (taskVisibilityFilter) used by EVERY read, so there
+   is a single place to audit. If an oversight view is ever genuinely needed,
+   add it as its own route with its own audit trail rather than widening this
+   filter -- and expect to tell people their tasks are readable. */
 const TASK_STATUS_LABELS = { PENDING: "Pending", IN_PROGRESS: "In Progress", COMPLETED: "Completed" };
 
 // The creator's own handle: their empId code. Unchanged — the Daybook keys its
@@ -930,13 +939,10 @@ function sessionOwnerKey(req) {
   return req.session?.authUser?.empId || null;
 }
 
-function canSeeAllTasks(req) {
-  return TASK_ALL_SCOPE_ROLES.includes(String(req.session?.authUser?.role || "").toLowerCase());
-}
-
-// Everything the current user is party to — theirs to see, and the set the
-// Daybook may pull from. An assignee can put their own work in their Daybook;
-// before assignment existed this was "created by me" alone.
+// Everything the current user is party to, and the ONLY set any task read in
+// this file is allowed to draw on: tasks they created, plus tasks assigned to
+// them. An assignee can put their own work in their Daybook; before
+// assignment existed this was "created by me" alone.
 function taskVisibilityFilter({ ownerKey, employeeId }) {
   const or = [];
   if (ownerKey) or.push({ createdBy: ownerKey });
@@ -946,26 +952,25 @@ function taskVisibilityFilter({ ownerKey, employeeId }) {
   return or.length === 1 ? or[0] : { $or: or };
 }
 
-function taskScopeFilter(scope, { ownerKey, employeeId, canAll }) {
-  if (scope === "all" && canAll) return {};
-  if (scope === "created") return ownerKey ? { createdBy: ownerKey } : { _id: null };
-  return employeeId ? { assignedTo: employeeId } : { _id: null };
-}
-
 // What the row's buttons are allowed to do. Sent to the page so it can hide
 // what this user can't use; the POST/PUT/DELETE handlers check the same facts
 // again, because the page is only a convenience.
-function taskPermissions(task, { ownerKey, employeeId, canAll }) {
+function taskPermissions(task, { ownerKey, employeeId }) {
   const isCreator = Boolean(ownerKey) && String(task.createdBy || "") === String(ownerKey);
   const assigneeId = task.assignedTo?._id ?? task.assignedTo;
   const isAssignee = Boolean(employeeId) && String(assigneeId || "") === String(employeeId);
   return {
     isCreator,
     isAssignee,
-    canEdit: isCreator || canAll,
-    canDelete: isCreator || canAll,
-    // Progressing the work is the assignee's job as much as the creator's.
-    canSetStatus: isCreator || canAll || isAssignee,
+    canEdit: isCreator,
+    canDelete: isCreator,
+    // Closing a task off is the business of whoever handed it out: if you
+    // assigned work to somebody, you are the one who decides it is done, and
+    // the assignee is given no Mark Complete / Reopen at all. Same test as
+    // canEdit on purpose, kept as its own name because it gates its own
+    // button -- so that if the two ever need to differ again, the place to
+    // change is obvious.
+    canSetStatus: isCreator,
   };
 }
 
@@ -984,6 +989,25 @@ async function resolveTaskAssignee(assignedToId, assignedToManualName) {
   const employee = await Employee.findById(assignedToId).select("empName").lean();
   if (!employee) throw new Error("Selected employee was not found.");
   return { assignedTo: assignedToId, assignedToIsOthers: false, assignedToOthers: undefined, empName: employee.empName };
+}
+
+/* The optional "who is this reminder about" pick, used when a task is kept
+   rather than sent. Same shape as resolveTaskAssignee, with two differences
+   that matter: it is OPTIONAL (a reminder need not be about anybody), and it
+   is display context only — nothing in this file reads aboutEmployee when
+   deciding who may see a task or who gets notified, so recording somebody
+   here can never hand them the task or ring their bell. */
+async function resolveTaskAbout(aboutId, manualName) {
+  const typed = String(manualName || "").trim();
+  if (aboutId === "OTHERS") {
+    if (!typed) throw new Error("Please enter the name this task is about.");
+    return { aboutEmployee: null, aboutEmployeeName: typed };
+  }
+  if (!aboutId) return { aboutEmployee: null, aboutEmployeeName: "" };
+  if (!mongoose.isValidObjectId(aboutId)) throw new Error("Invalid employee selected.");
+  const employee = await Employee.findById(aboutId).select("empName").lean();
+  if (!employee) throw new Error("Selected employee was not found.");
+  return { aboutEmployee: aboutId, aboutEmployeeName: employee.empName };
 }
 
 // Who to tell when a task is completed. Tasks created before createdById
@@ -1015,46 +1039,33 @@ async function resolveTaskClient(clientId, clientManualName) {
 router.get("/tasks", async (req, res) => {
   const ownerKey = sessionOwnerKey(req);
   const employeeId = await sessionEmployeeId(req);
-  const canAll = canSeeAllTasks(req);
 
-  // A bell row arrives as ?open=<taskId>. The task has to be in the view the
-  // page opens on or the link lands on a list it isn't in, so when no scope
-  // was asked for, the scope follows the task.
+  // One list of everything this person is party to, and nothing else:
+  // assigned to them or created by them. Which of the two a row is -- assigned
+  // to me / created by me / both -- is a column the table sorts and filters
+  // on, so a bell link (?open=<taskId>) always lands on a list that holds the
+  // task. No role widens this filter; see the note above taskVisibilityFilter.
   const openId = mongoose.isValidObjectId(req.query.open) ? String(req.query.open) : "";
-  let scope = TASK_SCOPES.includes(req.query.scope) ? req.query.scope : "";
-  if (scope === "all" && !canAll) scope = "";
-
-  if (openId && !scope) {
-    const target = await Task.findOne({ _id: openId, deletedAt: null })
-      .select("assignedTo createdBy")
-      .lean();
-    if (target) {
-      const perms = taskPermissions(target, { ownerKey, employeeId, canAll });
-      scope = perms.isAssignee ? "mine" : perms.isCreator ? "created" : canAll ? "all" : "";
-    }
-  }
-  // Default view is the person's own work. Someone with no employee record
-  // behind their session (dev backdoor) has no "mine", so they start on what
-  // they created.
-  if (!scope) scope = employeeId ? "mine" : "created";
-
-  const filter = { deletedAt: null, ...taskScopeFilter(scope, { ownerKey, employeeId, canAll }) };
+  const filter = { deletedAt: null, ...taskVisibilityFilter({ ownerKey, employeeId }) };
 
   const [tasks, employees, clients, daybookEntries] = await Promise.all([
     Task.find(filter)
       // Task lives on an isolated database connection (config/tasksDb.js), so
       // Mongoose can't resolve these refs by name — pass the actual models.
-      .populate({ path: "assignedTo", select: "empName empId", model: Employee })
+      .populate({ path: "assignedTo", select: "empName empNickName empId", model: Employee })
+      // Read live so a renamed employee reads correctly; aboutEmployeeName is
+      // the fallback for a free-text name or a since-deleted employee.
+      .populate({ path: "aboutEmployee", select: "empName empNickName", model: Employee })
       .populate({ path: "client", select: "clientName clientId", model: Client })
       .sort({ createdAt: -1 })
       .lean(),
-    Employee.find({ isActive: true }, "empName empId").sort({ empName: 1 }).lean(),
+    Employee.find({ isActive: true }, "empName empNickName empId").sort({ empName: 1 }).lean(),
     Client.find().select("clientName clientId").sort({ clientName: 1 }).lean(),
     ownerKey ? DaybookEntry.find({ createdBy: ownerKey }).select("task").lean() : [],
   ]);
 
   const daybookTaskIds = daybookEntries.map((e) => String(e.task));
-  const rows = tasks.map((task) => ({ ...task, perms: taskPermissions(task, { ownerKey, employeeId, canAll }) }));
+  const rows = tasks.map((task) => ({ ...task, perms: taskPermissions(task, { ownerKey, employeeId }) }));
 
   res.render("miscellaneous/tasks.ejs", {
     title: "Company Tasks",
@@ -1064,8 +1075,6 @@ router.get("/tasks", async (req, res) => {
     daybookTaskIds,
     employees,
     clients,
-    scope,
-    canSeeAllTasks: canAll,
     hasEmployeeIdentity: Boolean(employeeId),
     openTaskId: openId,
     notification: req.flash("notification"),
@@ -1084,7 +1093,7 @@ router.get("/tasks/mine", async (req, res) => {
 
   try {
     const tasks = await Task.find({ deletedAt: null, assignedTo: employeeId })
-      .select("title label status dueDate createdByName createdBy client clientIsOthers clientOthers completedAt createdAt")
+      .select("title label status dueDate createdByName createdBy client clientIsOthers clientOthers aboutEmployeeName completedAt createdAt")
       .populate({ path: "client", select: "clientName", model: Client })
       .sort({ dueDate: 1, createdAt: -1 })
       .lean();
@@ -1144,7 +1153,7 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
        ever be assigned to the person creating it. */
     const assignMode = req.body.assignMode === "self" ? "self" : "send";
 
-    let assignee, clientInfo;
+    let assignee, clientInfo, about;
     try {
       if (assignMode === "self") {
         if (!myEmployeeId) {
@@ -1157,6 +1166,10 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
       } else {
         assignee = await resolveTaskAssignee(assignedTo, assignedToManualName);
       }
+      // Noted whenever it is given, whatever the mode. The dialog only offers
+      // it on a kept reminder (where the employee picker has no assignee to
+      // name), and it changes nothing about who owns or sees the task.
+      about = await resolveTaskAbout(req.body.aboutEmployee, req.body.aboutManualName);
       clientInfo = await resolveTaskClient(client, clientManualName);
     } catch (err) {
       return res.status(400).json({ success: false, message: err.message });
@@ -1172,6 +1185,8 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
       assignedToIsOthers: assignee.assignedToIsOthers,
       assignedToOthers: assignee.assignedToOthers,
       assignedToName: assignee.empName,
+      aboutEmployee: about.aboutEmployee,
+      aboutEmployeeName: about.aboutEmployeeName,
       client: clientInfo.client,
       clientIsOthers: clientInfo.clientIsOthers,
       clientOthers: clientInfo.clientOthers,
@@ -1201,10 +1216,15 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
       });
     }
 
+    /* Deliberately WITHOUT the task's title or the people on it. The audit log
+       is readable by proprietor/admin/hod (GET /audit/view), and task text is
+       private to the two people on the task -- writing it here would hand every
+       confidential task title to exactly the roles the visibility rule excludes.
+       The id is enough for accountability: who acted, when, on which record --
+       and it discloses nothing, because reading that record still goes through
+       taskVisibilityFilter. */
     res.locals.auditDescription =
-      assignMode === "self"
-        ? `Created personal reminder "${task.title}"`
-        : `Created task "${task.title}" assigned to "${assignee.empName}"`;
+      assignMode === "self" ? `Created a personal reminder (${task._id})` : `Created and assigned a task (${task._id})`;
     req.flash("notification", assignMode === "self" ? "Reminder saved for you." : "Task created successfully!");
     // Land on the new task rather than on a fixed view: the default view is
     // "Assigned to me", so a task just handed to somebody else would not be
@@ -1255,6 +1275,19 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
       update.assignedToOthers = assignee.assignedToOthers ?? null;
       update.assignedToName = assignee.empName;
     }
+    if (req.body.aboutEmployee !== undefined) {
+      let about;
+      try {
+        about = await resolveTaskAbout(req.body.aboutEmployee, req.body.aboutManualName);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      // An empty pick clears it — that is how a reminder stops being about
+      // anybody. Display context only, so it is treated as an ordinary edit:
+      // it notifies nobody and changes nothing about who sees the task.
+      update.aboutEmployee = about.aboutEmployee;
+      update.aboutEmployeeName = about.aboutEmployeeName;
+    }
     if (req.body.client !== undefined) {
       let clientInfo;
       try {
@@ -1269,7 +1302,6 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
 
     const ownerKey = sessionOwnerKey(req);
     const employeeId = await sessionEmployeeId(req);
-    const canAll = canSeeAllTasks(req);
     if (!ownerKey && !employeeId) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
@@ -1281,17 +1313,19 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
 
-    const perms = taskPermissions(existing, { ownerKey, employeeId, canAll });
-    // A task someone else owns and hasn't given you reads as missing, so an
-    // id guessed or kept from an old link tells the holder nothing.
-    if (!perms.canEdit && !perms.canSetStatus) {
-      return res.status(404).json({ success: false, message: "Task not found." });
-    }
-    // The assignee progresses the work; the rest of the task is the creator's.
-    if (!perms.canEdit && Object.keys(update).some((field) => field !== "status")) {
+    const perms = taskPermissions(existing, { ownerKey, employeeId });
+    if (!perms.canEdit) {
+      // A task that is neither yours nor given to you reads as missing, so an
+      // id guessed or kept from an old link tells the holder nothing. An
+      // assignee can plainly see the task, so telling them it does not exist
+      // would only confuse -- they are told whose call it is instead.
+      if (!perms.isAssignee) {
+        return res.status(404).json({ success: false, message: "Task not found." });
+      }
+      const whose = existing.createdByName ? ` Ask ${existing.createdByName} to close it off.` : "";
       return res.status(403).json({
         success: false,
-        message: "This task is assigned to you — you can change its status, but only the person who created it can edit it.",
+        message: `This task was assigned to you — only the person who assigned it can change or complete it.${whose}`,
       });
     }
 
@@ -1376,7 +1410,14 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
       });
     }
 
-    res.locals.auditDescription = `Updated task "${updated.title}"`;
+    /* Deliberately WITHOUT the task's title or the people on it. The audit log
+       is readable by proprietor/admin/hod (GET /audit/view), and task text is
+       private to the two people on the task -- writing it here would hand every
+       confidential task title to exactly the roles the visibility rule excludes.
+       The id is enough for accountability: who acted, when, on which record --
+       and it discloses nothing, because reading that record still goes through
+       taskVisibilityFilter. */
+    res.locals.auditDescription = `Updated a task (${updated._id})`;
     res.json({ success: true });
   } catch (err) {
     console.error("TASK UPDATE ERROR:", err);
@@ -1392,7 +1433,6 @@ router.delete("/api/tasks/:id", requireAuth, deleteLimiter, async (req, res) => 
     }
     const ownerKey = sessionOwnerKey(req);
     const employeeId = await sessionEmployeeId(req);
-    const canAll = canSeeAllTasks(req);
     if (!ownerKey && !employeeId) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
@@ -1400,7 +1440,7 @@ router.delete("/api/tasks/:id", requireAuth, deleteLimiter, async (req, res) => 
     const existing = await Task.findOne({ _id: req.params.id, deletedAt: null }).select("title createdBy assignedTo").lean();
     // Deleting is the creator's call (or an all-scope role's). An assignee
     // can finish a task or hand it back, not make it disappear.
-    if (!existing || !taskPermissions(existing, { ownerKey, employeeId, canAll }).canDelete) {
+    if (!existing || !taskPermissions(existing, { ownerKey, employeeId }).canDelete) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
 
@@ -1408,11 +1448,18 @@ router.delete("/api/tasks/:id", requireAuth, deleteLimiter, async (req, res) => 
       { _id: req.params.id, deletedAt: null },
       { deletedAt: new Date() },
       { new: true },
-    ).select("title").lean();
+    ).select("_id").lean();
     if (!deleted) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
-    res.locals.auditDescription = `Deleted task "${deleted.title}"`;
+    /* Deliberately WITHOUT the task's title or the people on it. The audit log
+       is readable by proprietor/admin/hod (GET /audit/view), and task text is
+       private to the two people on the task -- writing it here would hand every
+       confidential task title to exactly the roles the visibility rule excludes.
+       The id is enough for accountability: who acted, when, on which record --
+       and it discloses nothing, because reading that record still goes through
+       taskVisibilityFilter. */
+    res.locals.auditDescription = `Deleted a task (${req.params.id})`;
     res.json({ success: true });
   } catch (err) {
     console.error("TASK DELETE ERROR:", err);
@@ -1455,7 +1502,10 @@ router.get("/daybook", async (req, res) => {
       : [],
     hasIdentity
       ? Task.find({ deletedAt: null, ...mineFilter, status: { $ne: "COMPLETED" } })
-          .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers")
+          // createdBy / createdByName are what taskPermissions below reads to
+          // decide whose task it is -- without them every row would look like
+          // somebody else's and lose its buttons.
+          .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers createdBy createdByName")
           .populate({ path: "assignedTo", select: "empName", model: Employee })
           .populate({ path: "client", select: "clientName", model: Client })
           .sort({ createdAt: -1 })
@@ -1463,7 +1513,7 @@ router.get("/daybook", async (req, res) => {
       : [],
     hasIdentity
       ? Task.find({ deletedAt: null, ...mineFilter, status: "COMPLETED" })
-          .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers")
+          .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers createdBy createdByName")
           .populate({ path: "assignedTo", select: "empName empId", model: Employee })
           .populate({ path: "client", select: "clientName clientId", model: Client })
           .sort({ createdAt: -1 })
@@ -1473,8 +1523,16 @@ router.get("/daybook", async (req, res) => {
 
   const validEntries = entries.filter((e) => e.task);
 
+  // The Daybook lists work assigned to this person as well as work they set
+  // themselves, and only the person who handed a task out may close it off --
+  // so each row carries what its buttons are allowed to do, exactly as the
+  // Tasks page does. PUT /api/tasks/:id checks the same facts again.
+  const permsCtx = { ownerKey, employeeId };
+  const withPerms = (task) => ({ ...task, perms: taskPermissions(task, permsCtx) });
+  for (const entry of validEntries) entry.task = withPerms(entry.task);
+
   const pickedTaskIds = new Set(validEntries.map((e) => String(e.task._id)));
-  const pickableTasks = availableTasks.filter((t) => !pickedTaskIds.has(String(t._id)));
+  const pickableTasks = availableTasks.filter((t) => !pickedTaskIds.has(String(t._id))).map(withPerms);
 
   res.render("miscellaneous/daybook.ejs", {
     title: "Daybook",
@@ -1482,7 +1540,7 @@ router.get("/daybook", async (req, res) => {
     JS: false,
     entries: validEntries,
     pickableTasks,
-    completedTasks,
+    completedTasks: completedTasks.map(withPerms),
     notification: req.flash("notification"),
   });
 });

@@ -1,7 +1,12 @@
-import { fileURLToPath } from "url";
-import path from "path";
-import dotenv from "dotenv";
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".env") });
+// MUST be the first import. models/miscellaneous/task_model.js opens the tasks
+// database connection at IMPORT time (config/tasksDb.js), and ES modules
+// evaluate every static import before any statement in this file's body -- so
+// a dotenv.config() call down here would run too late and that connection
+// would be built from a missing MONGO_URI. It then silently lands on the
+// fallback database ("app_tasks") and this script reports "0 tasks scanned"
+// while the real ones sit untouched. Run from the project root, since this
+// resolves .env from the working directory.
+import "../config/loadEnv.js";
 import mongoose from "mongoose";
 import connectDB from "../config/db.js";
 import Task from "../models/miscellaneous/task_model.js";

@@ -243,6 +243,11 @@
     employeeName: t.assignedToIsOthers ? t.assignedToOthers : (t.assignedTo?.empName || "Unassigned"),
     clientName:   t.clientIsOthers ? t.clientOthers : (t.client?.clientName || "—"),
     status:       t.status || "PENDING",
+    // Only whoever handed the task out may close it off, so a task that is
+    // merely assigned to me is listed here without a Mark Complete button
+    // (decided server-side by taskPermissions; the PUT refuses it too).
+    canSetStatus: Boolean(t.perms?.canSetStatus),
+    createdByName: t.createdByName || "",
   });
 
   const tableData = rawEntries.map(e => rowFromTask(e.task || {}, String(e._id)));
@@ -300,19 +305,32 @@
           const wrap = document.createElement("div");
           wrap.style.cssText = "display:flex;gap:5px;justify-content:center;";
 
-          const completeBtn = document.createElement("button");
-          completeBtn.className = "row-btn";
-          completeBtn.style.background = row.status === "COMPLETED" ? "#94a3b8" : "#28a745";
-          completeBtn.title = row.status === "COMPLETED" ? "Reopen task" : "Mark complete";
-          completeBtn.innerHTML = row.status === "COMPLETED" ? '<i class="fa-solid fa-rotate-left"></i>' : '<i class="fa-solid fa-check"></i>';
-          completeBtn.addEventListener("click", () => toggleComplete(cell.getRow(), completeBtn));
+          // Work that was assigned to me is mine to do, not mine to sign off:
+          // the button simply isn't there, and the row says who to ask.
+          let completeBtn = null;
+          if (row.canSetStatus) {
+            completeBtn = document.createElement("button");
+            completeBtn.className = "row-btn";
+            completeBtn.style.background = row.status === "COMPLETED" ? "#94a3b8" : "#28a745";
+            completeBtn.title = row.status === "COMPLETED" ? "Reopen task" : "Mark complete";
+            completeBtn.innerHTML = row.status === "COMPLETED" ? '<i class="fa-solid fa-rotate-left"></i>' : '<i class="fa-solid fa-check"></i>';
+            completeBtn.addEventListener("click", () => toggleComplete(cell.getRow(), completeBtn));
+          } else {
+            const note = document.createElement("span");
+            note.style.cssText = "font-size:11px;color:#94a3b8;white-space:nowrap;";
+            note.textContent = row.createdByName ? `${row.createdByName} closes` : "theirs to close";
+            note.title = row.createdByName
+              ? `Only ${row.createdByName}, who assigned this task, can mark it complete.`
+              : "Only the person who assigned this task can mark it complete.";
+            wrap.appendChild(note);
+          }
 
           // Completed work is a record, not a worklist: undo is the only thing
           // worth offering. Reopen it and the full set of actions comes back.
           // It also sidesteps the ragged column a completed task with no
           // Daybook entry would otherwise leave behind.
           if (row.status === "COMPLETED") {
-            wrap.appendChild(completeBtn);
+            if (completeBtn) wrap.appendChild(completeBtn);
             return wrap;
           }
 
@@ -323,7 +341,7 @@
           removeBtn.innerHTML = '<i class="fa-solid fa-arrow-rotate-left"></i>';
           removeBtn.addEventListener("click", () => openRemoveDialog(cell.getRow()));
 
-          wrap.appendChild(completeBtn);
+          if (completeBtn) wrap.appendChild(completeBtn);
           wrap.appendChild(removeBtn);
           return wrap;
         },

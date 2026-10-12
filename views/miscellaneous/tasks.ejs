@@ -43,6 +43,11 @@
     .dialog-field-group.hidden-field { display: none; }
     .dialog-field-row { display: flex; gap: 12px; margin-bottom: 16px; }
     .dialog-field-row .dialog-field-group { flex: 1; margin-bottom: 0; min-width: 0; }
+    /* With "Others" picked the picker only holds that one word, so it shrinks
+       and the name field beside it gets the room. */
+    .dialog-field-row:has(> [id$="ManualGroup"]:not(.hidden-field)) > .dialog-choices { flex: 0 0 38%; }
+    /* A row whose fields are all hidden (e.g. the About picker on a sent task) leaves no gap. */
+    .dialog-field-row:not(:has(> :not(.hidden-field))) { display: none; }
     .dialog-error { color: #ef4444; font-size: 12px; margin-top: 5px; display: none; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
     .dialog-choices .choices__inner {
@@ -64,35 +69,11 @@
     .status-choices[data-value="IN_PROGRESS"] .choices__inner { border-color: #044a78 !important; }
     .status-choices[data-value="COMPLETED"] .choices__inner { border-color: #28a745 !important; }
 
-    /* Whose tasks am I looking at. Server-side scope (see GET /tasks) — these
-       are plain links, so the chosen view survives a reload and can be shared. */
-    /* Sits on the blue .indi-head, so it is a frosted track with a white "thumb"
-       on the active segment rather than a grey slab. */
-    .scope-switch {
-      display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
-      background: rgba(255, 255, 255, 0.14);
-      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
-    }
-    .scope-switch a {
-      padding: 5px 16px; font-size: 13px; font-weight: 600; line-height: 1.2; white-space: nowrap;
-      color: rgba(255, 255, 255, 0.82); text-decoration: none; border-radius: 999px;
-      display: flex; align-items: center; gap: 7px;
-      transition: background 0.18s, color 0.18s, box-shadow 0.18s;
-    }
-    .scope-switch a:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
-    .scope-switch a:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
-    .scope-switch a.active {
-      background: #fff; color: #044a78;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    }
-    .scope-count {
-      font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
-      background: rgba(255, 255, 255, 0.22); color: #fff;
-    }
-    .scope-count:empty { display: none; }
-    .scope-switch a.active .scope-count { background: #e6f0f7; color: #044a78; }
-    .scope-count.overdue { background: #dc3545; color: #fff; }
-    .scope-switch a.active .scope-count.overdue { background: #fde8ea; color: #b4232f; }
+    /* Same brand-blue scrollbar as the table, for the dialog bodies that scroll. */
+    .dialog-body { scrollbar-width: thin; scrollbar-color: #044A78 #f0f2f5; }
+    .dialog-body::-webkit-scrollbar { width: 10px; height: 10px; }
+    .dialog-body::-webkit-scrollbar-track { background: #f0f2f5; }
+    .dialog-body::-webkit-scrollbar-thumb { background: #044A78; border-radius: 6px; }
 
     /* Send-to-employee vs keep-for-myself, in the New Task dialog. */
     .mode-switch { display: flex; gap: 8px; }
@@ -117,6 +98,78 @@
     @media (prefers-reduced-motion: reduce) {
       .tabulator-row.row-flash { animation: none; background-color: #fff3cd; }
     }
+
+    /* ── New Task dialog (scoped to #addDialog; Edit keeps the shared look) ── */
+    #addDialog .nt-head { gap: 14px; justify-content: flex-start; align-items: center; padding: 18px 22px; }
+    #addDialog .nt-head-icon {
+      width: 40px; height: 40px; flex: none; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255, 255, 255, 0.16); color: #fff; font-size: 17px;
+    }
+    #addDialog .nt-head-text { flex: 1; min-width: 0; }
+    #addDialog .nt-head-text h2 { font-size: 1.12rem; line-height: 1.2; }
+    #addDialog .nt-head-text p { margin: 3px 0 0; font-size: 12.5px; color: rgba(255, 255, 255, 0.78); }
+    #addDialog .dialog-close-btn {
+      width: 30px; height: 30px; border-radius: 8px; font-size: 22px;
+      display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    #addDialog .dialog-close-btn:hover { background: rgba(255, 255, 255, 0.16); }
+
+    #addDialog .nt-body { padding: 8px 24px 4px; border-radius: 0; background: #fff; }
+    #addDialog .nt-section { padding: 18px 0 4px; border-bottom: 1px solid #eef2f6; }
+    #addDialog .nt-section:last-child { border-bottom: none; }
+    #addDialog .nt-section-title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #044a78; margin-bottom: 12px;
+    }
+    #addDialog .dialog-field-label { font-size: 12.5px; margin-bottom: 6px; }
+    #addDialog .premium-input,
+    #addDialog .dialog-choices .choices__inner { min-height: 44px; border-radius: 10px; }
+    #addDialog .premium-input:focus { border-color: #044a78; box-shadow: 0 0 0 3px rgba(4, 74, 120, 0.12); }
+    #addDialog .nt-who-row { display: flex; gap: 12px; align-items: flex-end; }
+    #addDialog .nt-who { flex: 1; min-width: 0; }
+    #addDialog .nt-date-group { flex: 0 0 150px; }
+    #addDialog .nt-who-row .nt-section-title { margin-bottom: 8px; }
+    #addDialog .nt-who-row .nt-section-title label { margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+    #addDialog .nt-who-row .mode-switch { margin-bottom: 0; }
+    #addDialog .nt-who-row .mode-btn { min-height: 36px; }
+    #addDialog .nt-who-row .premium-input { height: 44px; }
+    #addDialog .nt-who-row + .mode-hint { margin-top: 12px; }
+    /* With "Others" picked the employee / client picker only holds that one word: keep it narrow. */
+    #addDialog .dialog-field-row:has(> #addAssignedToManualGroup:not(.hidden-field)) > #addEmployeeGroup,
+    #addDialog .dialog-field-row:has(> #addClientManualGroup:not(.hidden-field)) > #addClientGroup { flex: 0 0 24%; min-width: 130px; }
+    #addDialog .nt-title-input { font-size: 15px; font-weight: 500; }
+
+    /* Segmented "who is this for" control */
+    #addDialog .mode-switch { margin-bottom: 12px; gap: 0; padding: 4px; background: #f1f5f9; border-radius: 12px; }
+    #addDialog .mode-btn { border: none; background: transparent; border-radius: 9px; padding: 10px 10px; }
+    #addDialog .mode-btn:hover:not(:disabled):not(.is-active) { background: #e2e8f0; }
+    #addDialog .mode-btn.is-active { background: #044a78; color: #fff; box-shadow: 0 2px 6px rgba(4, 74, 120, 0.3); }
+    #addDialog .mode-hint:empty { display: none; }
+    #addDialog .mode-hint {
+      margin: 0 0 14px; padding: 9px 12px; border-radius: 9px;
+      background: #f0f7fc; border-left: 3px solid #044a78; color: #475569;
+    }
+
+    /* Footer stays put while the body scrolls */
+    #addDialog .nt-footer {
+      flex-shrink: 0; padding: 14px 24px 18px; background: #f8fafc;
+      border-top: 1px solid #e2e8f0; border-radius: 0 0 14px 14px;
+    }
+    #addDialog .nt-footer .dialog-error { margin: 0 0 10px; }
+    #addDialog .nt-footer .dialog-actions { margin-top: 0; }
+
+    @media (max-width: 520px) {
+      #addDialog .nt-body { padding: 4px 16px 0; }
+      #addDialog .nt-footer { padding: 12px 16px 16px; }
+      #addDialog .dialog-field-row { flex-direction: column; gap: 16px; }
+      #addDialog .dialog-field-row:has(> #addAssignedToManualGroup:not(.hidden-field)) > #addEmployeeGroup,
+    #addDialog .dialog-field-row:has(> #addClientManualGroup:not(.hidden-field)) > #addClientGroup { flex: 1 1 auto; }
+      #addDialog .nt-who-row { flex-direction: column; align-items: stretch; }
+      #addDialog .nt-date-group { flex: 1 1 auto; }
+      #addDialog .dialog-field-row:has(> [id$="ManualGroup"]:not(.hidden-field)) > .dialog-choices { flex: 1 1 auto; }
+      #addDialog .mode-btn { font-size: 12.5px; }
+    }
   </style>
 
   <div class="indi-head">
@@ -125,17 +178,6 @@
       <span id="viewLabel" style="font-weight: 400; font-size: 0.9rem; opacity: 0.85;">&nbsp;— Open</span>
     </h1>
     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
-      <div class="scope-switch" role="group" aria-label="Whose tasks">
-        <a href="/app/tasks?scope=mine" class="<%= scope === 'mine' ? 'active' : '' %>">
-          Assigned to me <span class="scope-count" id="mineCount"></span>
-        </a>
-        <a href="/app/tasks?scope=created" class="<%= scope === 'created' ? 'active' : '' %>">Created by me</a>
-        <%# "All" is a role power (proprietor/admin/hod) — and the server
-            enforces it: asking for ?scope=all without the role falls back. %>
-        <% if (canSeeAllTasks) { %>
-        <a href="/app/tasks?scope=all" class="<%= scope === 'all' ? 'active' : '' %>">All</a>
-        <% } %>
-      </div>
       <!-- Same split as the Daybook: completed tasks stay in the list but sit
            behind this toggle. Both pages read the one Task.status, so a task
            completed on either page lands in the Completed view on both. -->
@@ -158,66 +200,93 @@
 
 <!-- ============ ADD TASK DIALOG ============ -->
 <div class="logout-modal" id="addDialog" aria-hidden="true">
-  <div class="logout-dialog" role="dialog" aria-modal="true" aria-labelledby="addDialogTitle"
-    style="width: min(480px, 95vw); padding: 0; border-radius: 14px; border: none;">
-    <div class="dialog-header">
-      <h2 id="addDialogTitle">New Task</h2>
+  <div class="logout-dialog nt-dialog" role="dialog" aria-modal="true" aria-labelledby="addDialogTitle"
+    style="width: min(640px, 95vw); max-height: 90vh; display: flex; flex-direction: column; padding: 0; border-radius: 14px; border: none;">
+    <div class="dialog-header nt-head" style="flex-shrink: 0;">
+      <span class="nt-head-icon" aria-hidden="true"><i class="fa-solid fa-list-check"></i></span>
+      <div class="nt-head-text">
+        <h2 id="addDialogTitle">New Task</h2>
+        <p>Assign work to someone, or set yourself a reminder.</p>
+      </div>
       <button class="dialog-close-btn" type="button" onclick="closeAddDialog()" aria-label="Close">×</button>
     </div>
-    <div class="dialog-body">
-      <!-- Who the task is for comes first: it decides what the rest of the
-           form means. "Keep for myself" makes it the creator's own task, so
-           the Assigned Employee field below has nothing to say and is hidden,
-           and nobody is notified. -->
-      <div class="dialog-field-group">
-        <label class="dialog-field-label">Who is this for?</label>
-        <div class="mode-switch" id="addModeSwitch" role="group" aria-label="Who is this task for">
-          <button type="button" class="mode-btn is-active" data-mode="send" aria-pressed="true">
-            <i class="fa-solid fa-paper-plane"></i> Send to employee
-          </button>
-          <button type="button" class="mode-btn" data-mode="self" aria-pressed="false">
-            <i class="fa-regular fa-bell"></i> Keep for myself
-          </button>
+    <div class="dialog-body nt-body" style="overflow-y: auto; min-height: 0;">
+      <!-- Who the task is for decides what the employee field
+           below MEANS. Sent, that employee is the assignee and is notified.
+           Kept, the task is the creator's own and nobody is notified — the
+           same picker then just records who the reminder is about, which is
+           optional and gives that person nothing. -->
+      <section class="nt-section">
+        <div class="nt-who-row">
+          <div class="nt-date-group">
+            <div class="nt-section-title"><label for="addDueDateInput">Date</label></div>
+            <input type="date" id="addDueDateInput" class="form-control premium-input" />
+          </div>
+          <div class="nt-who">
+            <div class="nt-section-title">Who is this for?</div>
+            <div class="mode-switch" id="addModeSwitch" role="group" aria-label="Who is this task for">
+              <button type="button" class="mode-btn is-active" data-mode="send" aria-pressed="true">
+                <i class="fa-solid fa-paper-plane"></i> Tasked to employee
+              </button>
+              <button type="button" class="mode-btn" data-mode="self" aria-pressed="false">
+                <i class="fa-regular fa-bell"></i> Keep for myself
+              </button>
+            </div>
+          </div>
         </div>
         <div class="mode-hint" id="addModeHint"></div>
-      </div>
-      <div class="dialog-field-group">
-        <label class="dialog-field-label" for="addDueDateInput">Date</label>
-        <input type="date" id="addDueDateInput" class="form-control premium-input" />
-      </div>
-      <div class="dialog-field-group dialog-choices" id="addEmployeeGroup">
-        <label class="dialog-field-label" for="addEmployeeSelect">Assigned Employee</label>
-        <select id="addEmployeeSelect"><option value="">Select Employee</option></select>
-      </div>
-      <div class="dialog-field-group hidden-field" id="addAssignedToManualGroup">
-        <label class="dialog-field-label" for="addAssignedToManualInput">Employee Name (Manual)</label>
-        <input type="text" id="addAssignedToManualInput" class="form-control premium-input"
-          placeholder="Enter employee name" autocomplete="off" maxlength="100" />
-      </div>
-      <div class="dialog-field-group dialog-choices">
-        <label class="dialog-field-label" for="addClientSelect">Company / Client</label>
-        <select id="addClientSelect"><option value="">Select Client</option></select>
-      </div>
-      <div class="dialog-field-group hidden-field" id="addClientManualGroup">
-        <label class="dialog-field-label" for="addClientManualInput">Company / Client (Manual)</label>
-        <input type="text" id="addClientManualInput" class="form-control premium-input"
-          placeholder="Enter company / client name" autocomplete="off" maxlength="100" />
-      </div>
-      <div class="dialog-field-group">
-        <label class="dialog-field-label" for="addTitleInput">Title</label>
-        <input type="text" id="addTitleInput" class="form-control premium-input" placeholder="Enter task title" autocomplete="off" maxlength="200" />
-      </div>
-      <div class="dialog-field-row">
+      </section>
+
+      <section class="nt-section">
+        <div class="nt-section-title">Task</div>
         <div class="dialog-field-group">
-          <label class="dialog-field-label" for="addLabelInput">Label</label>
-          <input type="text" id="addLabelInput" class="form-control premium-input" placeholder="Enter label" autocomplete="off" maxlength="60" list="taskLabelOptions" />
+          <label class="dialog-field-label" for="addTitleInput">Title</label>
+          <input type="text" id="addTitleInput" class="form-control premium-input nt-title-input" placeholder="What needs to be done?" autocomplete="off" maxlength="200" />
         </div>
-        <div class="dialog-field-group dialog-choices status-choices" id="addStatusWrap" data-value="PENDING">
-          <label class="dialog-field-label" for="addStatusSelect">Status</label>
-          <select id="addStatusSelect"></select>
+        <div class="dialog-field-row">
+          <div class="dialog-field-group">
+            <label class="dialog-field-label" for="addLabelInput">Label</label>
+            <input type="text" id="addLabelInput" class="form-control premium-input" placeholder="Enter label" autocomplete="off" maxlength="60" list="taskLabelOptions" />
+          </div>
+          <div class="dialog-field-group dialog-choices status-choices" id="addStatusWrap" data-value="PENDING">
+            <label class="dialog-field-label" for="addStatusSelect">Status</label>
+            <select id="addStatusSelect"></select>
+          </div>
         </div>
-      </div>
-      <div id="addTaskError" class="dialog-error"></div>
+      </section>
+
+      <section class="nt-section">
+        <div class="nt-section-title">Assignment</div>
+        <%# Picking "Others" opens its name field beside the picker. %>
+        <div class="dialog-field-row">
+          <div class="dialog-field-group dialog-choices" id="addEmployeeGroup">
+            <%# Label and optionality follow the mode — see setAddMode(). %>
+            <label class="dialog-field-label" for="addEmployeeSelect" id="addEmployeeLabel">Assigned Employee</label>
+            <select id="addEmployeeSelect"><option value="">Select Employee</option></select>
+          </div>
+          <div class="dialog-field-group hidden-field" id="addAssignedToManualGroup">
+            <label class="dialog-field-label" for="addAssignedToManualInput">Other Person</label>
+            <input type="text" id="addAssignedToManualInput" class="form-control premium-input"
+              placeholder="Enter person's name" autocomplete="off" maxlength="100" />
+          </div>
+        </div>
+        <%# Picking "Others" opens its name field beside the picker. %>
+        <div class="dialog-field-row">
+          <div class="dialog-field-group dialog-choices" id="addClientGroup">
+            <label class="dialog-field-label" for="addClientSelect">Company / Client</label>
+            <select id="addClientSelect"><option value="">Select Client</option></select>
+          </div>
+          <div class="dialog-field-group hidden-field" id="addClientManualGroup">
+            <label class="dialog-field-label" for="addClientManualInput">Other Company / Client</label>
+            <input type="text" id="addClientManualInput" class="form-control premium-input"
+              placeholder="Enter other company / client name" autocomplete="off" maxlength="100" />
+          </div>
+        </div>
+      </section>
+
+    </div>
+    <div class="nt-footer">
+      <div id="addTaskError" class="dialog-error" role="alert"></div>
       <div class="dialog-actions">
         <button class="logout-btn" type="button" onclick="closeAddDialog()">Cancel</button>
         <button class="logout-btn primary" type="button" id="addSubmitBtn" onclick="submitAdd()">Save Task</button>
@@ -229,33 +298,55 @@
 <!-- ============ EDIT TASK DIALOG ============ -->
 <div class="logout-modal" id="editDialog" aria-hidden="true">
   <div class="logout-dialog" role="dialog" aria-modal="true" aria-labelledby="editDialogTitle"
-    style="width: min(480px, 95vw); padding: 0; border-radius: 14px; border: none;">
+    style="width: min(620px, 95vw); padding: 0; border-radius: 14px; border: none;">
     <div class="dialog-header">
       <h2 id="editDialogTitle">Edit Task</h2>
       <button class="dialog-close-btn" type="button" onclick="closeEditDialog()" aria-label="Close">×</button>
     </div>
     <div class="dialog-body">
-      <div class="dialog-field-group">
+      <div class="dialog-field-group" style="max-width: 200px;">
         <label class="dialog-field-label" for="editDueDateInput">Date</label>
         <input type="date" id="editDueDateInput" class="form-control premium-input" />
       </div>
-      <div class="dialog-field-group dialog-choices">
-        <label class="dialog-field-label" for="editEmployeeSelect">Assigned Employee</label>
-        <select id="editEmployeeSelect"><option value="">Select Employee</option></select>
+      <%# Picking "Others" opens its name field beside the picker. %>
+      <div class="dialog-field-row">
+        <div class="dialog-field-group dialog-choices">
+          <label class="dialog-field-label" for="editEmployeeSelect">Assigned Employee</label>
+          <select id="editEmployeeSelect"><option value="">Select Employee</option></select>
+        </div>
+        <div class="dialog-field-group hidden-field" id="editAssignedToManualGroup">
+          <label class="dialog-field-label" for="editAssignedToManualInput">Others</label>
+          <input type="text" id="editAssignedToManualInput" class="form-control premium-input"
+            placeholder="Enter employee name" autocomplete="off" maxlength="100" />
+        </div>
       </div>
-      <div class="dialog-field-group hidden-field" id="editAssignedToManualGroup">
-        <label class="dialog-field-label" for="editAssignedToManualInput">Employee Name (Manual)</label>
-        <input type="text" id="editAssignedToManualInput" class="form-control premium-input"
-          placeholder="Enter employee name" autocomplete="off" maxlength="100" />
+      <%# Shown only for a reminder somebody kept for themselves — that is the
+          only kind of task where "about" means anything, since on a sent task
+          the employee above IS the person it concerns. Clearing it is how a
+          reminder stops being about anyone. %>
+      <%# Picking "Others" opens its name field beside the picker. %>
+      <div class="dialog-field-row">
+        <div class="dialog-field-group dialog-choices hidden-field" id="editAboutGroup">
+          <label class="dialog-field-label" for="editAboutSelect">About (optional)</label>
+          <select id="editAboutSelect"><option value="">Select Employee</option></select>
+        </div>
+        <div class="dialog-field-group hidden-field" id="editAboutManualGroup">
+          <label class="dialog-field-label" for="editAboutManualInput">Others</label>
+          <input type="text" id="editAboutManualInput" class="form-control premium-input"
+            placeholder="Enter the name this is about" autocomplete="off" maxlength="100" />
+        </div>
       </div>
-      <div class="dialog-field-group dialog-choices">
-        <label class="dialog-field-label" for="editClientSelect">Company / Client</label>
-        <select id="editClientSelect"><option value="">Select Client</option></select>
-      </div>
-      <div class="dialog-field-group hidden-field" id="editClientManualGroup">
-        <label class="dialog-field-label" for="editClientManualInput">Company / Client (Manual)</label>
-        <input type="text" id="editClientManualInput" class="form-control premium-input"
-          placeholder="Enter company / client name" autocomplete="off" maxlength="100" />
+      <%# Picking "Others" opens its name field beside the picker. %>
+      <div class="dialog-field-row">
+        <div class="dialog-field-group dialog-choices">
+          <label class="dialog-field-label" for="editClientSelect">Company / Client</label>
+          <select id="editClientSelect"><option value="">Select Client</option></select>
+        </div>
+        <div class="dialog-field-group hidden-field" id="editClientManualGroup">
+          <label class="dialog-field-label" for="editClientManualInput">Others</label>
+          <input type="text" id="editClientManualInput" class="form-control premium-input"
+            placeholder="Enter company / client name" autocomplete="off" maxlength="100" />
+        </div>
       </div>
       <div class="dialog-field-group">
         <label class="dialog-field-label" for="editTitleInput">Title</label>
@@ -299,7 +390,7 @@
 </div>
 
 <script id="tasks-data" type="application/json"><%- safeJson(tasks) %></script>
-<script id="page-config" type="application/json"><%- safeJson({ scope, canSeeAllTasks, openTaskId, hasEmployeeIdentity }) %></script>
+<script id="page-config" type="application/json"><%- safeJson({ openTaskId, hasEmployeeIdentity }) %></script>
 <script id="employees-data" type="application/json"><%- safeJson(employees) %></script>
 <script id="clients-data" type="application/json"><%- safeJson(clients) %></script>
 <script id="daybook-task-ids-data" type="application/json"><%- safeJson(daybookTaskIds) %></script>
@@ -325,9 +416,19 @@
     _id:          String(t._id),
     title:        t.title || "",
     label:        t.label || "",
-    employeeName: t.assignedToIsOthers ? t.assignedToOthers : (t.assignedTo?.empName || "Unassigned"),
+    employeeName: t.assignedToIsOthers ? t.assignedToOthers : (t.assignedTo?.empNickName || t.assignedTo?.empName || "Unassigned"),
     employeeId:   t.assignedToIsOthers ? "OTHERS" : (t.assignedTo?._id ? String(t.assignedTo._id) : ""),
     employeeManualName: t.assignedToIsOthers ? (t.assignedToOthers || "") : "",
+    // Who a kept reminder is about. Live name when the employee still exists,
+    // falling back to the stored copy (a free-text "Others" name, or one whose
+    // employee record has since gone).
+    aboutName:    t.aboutEmployee?.empNickName || t.aboutEmployee?.empName || t.aboutEmployeeName || "",
+    // "OTHERS" spelt out, not OTHERS_VALUE: that const is declared further
+    // down with the dialog helpers, so reading it here would be a
+    // use-before-initialization error.
+    aboutId:      t.aboutEmployee?._id ? String(t.aboutEmployee._id)
+                  : (t.aboutEmployeeName ? "OTHERS" : ""),
+    aboutManualName: t.aboutEmployee?._id ? "" : (t.aboutEmployeeName || ""),
     clientName:   t.clientIsOthers ? t.clientOthers : (t.client?.clientName || "—"),
     clientId:     t.clientIsOthers ? "OTHERS" : (t.client?._id ? String(t.client._id) : ""),
     clientManualName: t.clientIsOthers ? (t.clientOthers || "") : "",
@@ -342,7 +443,17 @@
     canSetStatus: Boolean(t.perms?.canSetStatus),
     isCreator:    Boolean(t.perms?.isCreator),
     isMine:       Boolean(t.perms?.isAssignee),
-    createdByName: t.createdByName || "",
+    // Nickname when the creator is still an active employee, else the stored copy.
+    createdByName: (t.createdById && employeesData.find(e => String(e._id) === String(t.createdById))?.empNickName) || t.createdByName || "",
+    // Sortable/filterable replacement for the old Assigned / Created tabs.
+    // There is no fourth case: a task reaches this page only if it was set by
+    // or given to the person reading it (taskVisibilityFilter), so "someone
+    // else's task" cannot occur — if it ever shows, the server-side filter has
+    // been widened and the privacy rule is broken.
+    relation:     (t.perms?.isAssignee && t.perms?.isCreator) ? "Created & assigned to me"
+                  : t.perms?.isAssignee ? "Assigned to me"
+                  : t.perms?.isCreator ? "Created by me"
+                  : "—",
   }));
 
   // Completed work is kept, not hidden -- it moves behind the header toggle so
@@ -382,11 +493,7 @@
     height:           "100%",
     responsiveLayout: false,
     movableColumns:   true,
-    placeholder:      pageConfig.scope === "mine"
-                        ? (pageConfig.hasEmployeeIdentity
-                            ? "Nothing is assigned to you."
-                            : "This login isn't tied to an employee record, so nothing can be assigned to it.")
-                        : pageConfig.scope === "created" ? "You haven't created any tasks yet." : "No tasks yet.",
+    placeholder:      "No tasks yet.",
     columns: [
       // getPosition(true) is the row's rank among currently sorted/filtered
       // rows, re-evaluated on every redraw -- stays correct after sorting or
@@ -400,10 +507,20 @@
           const wrap = document.createElement("div");
           wrap.style.cssText = "display:flex;gap:5px;justify-content:center;";
 
-          // The assignee progresses the work (status), the creator owns the
-          // task itself (edit, delete) — so the row only offers what this
-          // person is allowed to do with it.
+          // Whoever handed the task out owns it: they edit it, delete it and
+          // decide it is done. Work assigned TO me is mine to do, not mine to
+          // sign off, so this row offers me no Mark Complete at all — just a
+          // quiet note saying whose call it is.
           let completeBtn = null;
+          if (!t.canSetStatus) {
+            const note = document.createElement("span");
+            note.style.cssText = "font-size:11px;color:#94a3b8;white-space:nowrap;align-self:center;";
+            note.textContent = t.createdByName ? `${t.createdByName} closes` : "theirs to close";
+            note.title = t.createdByName
+              ? `Only ${t.createdByName}, who assigned this task, can mark it complete.`
+              : "Only the person who assigned this task can mark it complete.";
+            wrap.appendChild(note);
+          }
           if (t.canSetStatus) {
             completeBtn = document.createElement("button");
             completeBtn.className = "row-btn";
@@ -464,12 +581,41 @@
           return isOverdue ? `<span style="color:#dc3545;font-weight:700;">${label}</span>` : label;
         },
       },
+      {
+        title: "Relation", field: "relation", width: 190, hozAlign: "center", sorter: "string",
+        headerFilter: "select",
+        // No "Others' task" option: this list only ever holds tasks set by or
+        // given to the person reading it, so there is nothing for it to match.
+        headerFilterParams: { values: { "": "All", MINE: "Assigned to me", CREATED: "Created by me" } },
+        // "Assigned to me" includes the tasks I assigned to myself, and
+        // "Created by me" likewise, so the two filters match the old tabs.
+        headerFilterFunc: (want, val) =>
+          !want ||
+          (want === "MINE" && /assigned to me/.test(val)) ||
+          (want === "CREATED" && /^Created/.test(val)),
+      },
       withTextFilter({ title: "Assigned Employee", field: "employeeName", minWidth: 170, sorter: "string" }),
+      // Who a kept reminder is ABOUT, as opposed to who it belongs to — only
+      // a reminder has one, so most rows are blank. It sits beside the
+      // assignee because that is the question it answers ("mine, about
+      // whom?"), and without it the name recorded in the dialog would be
+      // stored and editable but never visible.
+      withTextFilter({
+        title: "About", field: "aboutName", width: 150, sorter: "string",
+        // An element, not an HTML string: the value can be a typed-in name,
+        // and textContent cannot be made to inject anything.
+        formatter: (cell) => {
+          const val = cell.getValue();
+          if (!val) return "";
+          const span = document.createElement("span");
+          span.style.color = "#475569";
+          span.textContent = val;
+          return span;
+        },
+      }),
       // Who handed it over. Pointless in the "Created by me" view, where the
       // answer is always the person reading the page.
-      ...(pageConfig.scope === "created"
-        ? []
-        : [withTextFilter({ title: "Created By", field: "createdByName", width: 150, sorter: "string" })]),
+      withTextFilter({ title: "Created By", field: "createdByName", width: 150, sorter: "string" }),
       withTextFilter({ title: "Company / Client", field: "clientName", minWidth: 170, sorter: "string" }),
       withTextFilter({ title: "Title", field: "title", minWidth: 200, sorter: "string" }),
       withTextFilter({
@@ -547,7 +693,7 @@
   });
 
   /* ─── ARRIVING FROM A NOTIFICATION (?open=<taskId>) ─── */
-  // The bell's rows link here. The server already picked a scope that holds
+  // The bell's rows link here. The list holds every task this person can see, so it holds
   // the task (GET /tasks); this finds it in whichever of the two lists it
   // sits in, scrolls to it and flashes it.
   function revealOpenTask() {
@@ -574,25 +720,6 @@
     setTimeout(() => el.classList.remove("row-flash"), 4000);
   }
 
-  /* ─── "ASSIGNED TO ME" COUNT ─── */
-  // Live off GET /tasks/mine, so the figure is this person's whole plate, not
-  // just what the current view happens to show.
-  (async function paintMineCount() {
-    const el = document.getElementById("mineCount");
-    if (!el || !pageConfig.hasEmployeeIdentity) return;
-    try {
-      const res = await fetch("/app/tasks/mine", { headers: { Accept: "application/json" } });
-      if (!res.ok) return;
-      const { counts } = await res.json();
-      const outstanding = (counts?.open || 0) + (counts?.overdue || 0);
-      if (!outstanding) return;
-      el.textContent = counts.overdue ? `${outstanding} · ${counts.overdue} overdue` : String(outstanding);
-      el.classList.toggle("overdue", Boolean(counts.overdue));
-    } catch {
-      /* the count is a nicety — the list itself is already on screen */
-    }
-  })();
-
   /* ─────────────────────────────────────────
      Dialog helpers
   ───────────────────────────────────────── */
@@ -608,9 +735,9 @@
   function buildEmployeeChoices(selectId, selectedId) {
     const sel = document.getElementById(selectId);
     sel.innerHTML = '<option value="">Select Employee</option>' +
-      `<option value="${OTHERS_VALUE}"${selectedId === OTHERS_VALUE ? " selected" : ""}>Others (Not in Employee List)</option>` +
+      `<option value="${OTHERS_VALUE}"${selectedId === OTHERS_VALUE ? " selected" : ""}>Others</option>` +
       employeesData.map(e =>
-        `<option value="${e._id}"${String(e._id) === String(selectedId) ? " selected" : ""}>${e.empName}</option>`
+        `<option value="${e._id}"${String(e._id) === String(selectedId) ? " selected" : ""}>${e.empNickName || e.empName}</option>`
       ).join("");
     return new Choices(sel, { ...CHOICES_CONFIG, searchPlaceholderValue: "Search employee..." });
   }
@@ -618,7 +745,7 @@
   function buildClientChoices(selectId, selectedId) {
     const sel = document.getElementById(selectId);
     sel.innerHTML = '<option value="">Select Client</option>' +
-      `<option value="${OTHERS_VALUE}"${selectedId === OTHERS_VALUE ? " selected" : ""}>Others (Not in Client List)</option>` +
+      `<option value="${OTHERS_VALUE}"${selectedId === OTHERS_VALUE ? " selected" : ""}>Others</option>` +
       clientsData.map(c =>
         `<option value="${c._id}"${String(c._id) === String(selectedId) ? " selected" : ""}>${c.clientName}</option>`
       ).join("");
@@ -665,14 +792,24 @@
   /* ─── ADD ─── */
   let addEmployeeChoices = null, addClientChoices = null, addStatusChoices = null;
 
-  /* "Send to employee" hands the task over: it lands in that person's
-     "Assigned to me" and rings their bell. "Keep for myself" makes it the
-     creator's own task — assigned to me, so nobody else sees it and nobody is
-     notified (the server ignores the employee picker entirely in that mode,
-     and due reminders ring my own bell). */
-  const ADD_MODE_HINTS = {
-    send: "They'll see it under “Assigned to me” and get a notification.",
-    self: "Stays with you as a reminder — nobody else sees it and no one is notified.",
+  /* "Tasked to employee" hands the task over: the picked employee is the
+     assignee, it lands in their "Assigned to me" and rings their bell.
+     "Keep for myself" makes it the creator's own task — assigned to me, so
+     nobody else sees it and nobody is notified, and due reminders ring my own
+     bell. The same employee picker serves both, but in keep mode it means
+     something different and weaker: who the reminder is ABOUT. That is
+     optional, it is sent as its own field (the server never reads it as an
+     assignee), and the person named gets nothing — no notification, and the
+     task never appears in their list. */
+  const ADD_MODE_CONFIG = {
+    send: {
+      label: "Assigned Employee",
+      hint: "",
+    },
+    self: {
+      label: "About (optional)",
+      hint: "",
+    },
   };
   let addMode = "send";
 
@@ -683,12 +820,12 @@
       btn.classList.toggle("is-active", on);
       btn.setAttribute("aria-pressed", on ? "true" : "false");
     });
-    document.getElementById("addModeHint").textContent = ADD_MODE_HINTS[addMode];
-    // A reminder is mine by definition, so there is nothing to pick.
-    document.getElementById("addEmployeeGroup").classList.toggle("hidden-field", addMode === "self");
-    if (addMode === "self") {
-      toggleManualNameField("addAssignedToManualGroup", "addAssignedToManualInput", false);
-    }
+    const config = ADD_MODE_CONFIG[addMode];
+    document.getElementById("addModeHint").textContent = config.hint;
+    // The picker stays put and keeps whatever is selected — switching mode
+    // changes what that pick MEANS, which the label now says. The manual
+    // "Others" name below follows the same pick, so it is left alone too.
+    document.getElementById("addEmployeeLabel").textContent = config.label;
     hideError("addTaskError");
   }
 
@@ -715,7 +852,7 @@
     addStatusChoices   = buildStatusChoices("addStatusSelect", "addStatusWrap", "PENDING");
     toggleManualNameField("addAssignedToManualGroup", "addAssignedToManualInput", false);
     toggleManualNameField("addClientManualGroup", "addClientManualInput", false);
-    // Every open starts on "Send to employee", the way the dialog has always
+    // Every open starts on "Tasked to employee", the way the dialog has always
     // behaved; this also paints the hint and un-hides the employee field.
     setAddMode("send");
     document.getElementById("addTitleInput").value = "";
@@ -738,8 +875,10 @@
   async function submitAdd() {
     const title               = document.getElementById("addTitleInput").value.trim();
     const label                = document.getElementById("addLabelInput").value.trim();
-    const assignedTo          = addEmployeeChoices?.getValue(true) || "";
-    const assignedToManualName = document.getElementById("addAssignedToManualInput").value.trim();
+    // One picker, two meanings — the assignee when sending, who it is about
+    // when keeping (see setAddMode).
+    const employeePick        = addEmployeeChoices?.getValue(true) || "";
+    const employeeManualName  = document.getElementById("addAssignedToManualInput").value.trim();
     const client               = addClientChoices?.getValue(true) || "";
     const clientManualName     = document.getElementById("addClientManualInput").value.trim();
     const dueDate     = document.getElementById("addDueDateInput").value;
@@ -748,10 +887,15 @@
     const keepForMyself = addMode === "self";
 
     if (!title) { showError("addTaskError", "Task title is required."); return; }
-    // An employee is only asked for when the task is being sent to one.
-    if (!keepForMyself) {
-      if (!assignedTo) { showError("addTaskError", "Please select an employee."); return; }
-      if (assignedTo === OTHERS_VALUE && !assignedToManualName) { showError("addTaskError", "Please enter the employee name."); return; }
+    if (keepForMyself) {
+      // Optional here: a reminder need not be about anybody. Only a typed
+      // "Others" name left blank is an error.
+      if (employeePick === OTHERS_VALUE && !employeeManualName) {
+        showError("addTaskError", "Please enter the name this reminder is about."); return;
+      }
+    } else {
+      if (!employeePick) { showError("addTaskError", "Please select an employee."); return; }
+      if (employeePick === OTHERS_VALUE && !employeeManualName) { showError("addTaskError", "Please enter the employee name."); return; }
     }
     if (client === OTHERS_VALUE && !clientManualName) { showError("addTaskError", "Please enter the company / client name."); return; }
     hideError("addTaskError");
@@ -762,9 +906,12 @@
         body: JSON.stringify({
           title, label, client, clientManualName, dueDate, status,
           assignMode: keepForMyself ? "self" : "send",
-          // Left out of a reminder so the request says exactly what it means;
-          // the server ignores these in "self" mode either way.
-          ...(keepForMyself ? {} : { assignedTo, assignedToManualName }),
+          // The pick travels under the name of what it means, so the request
+          // can't be misread: a kept reminder never carries an assignedTo at
+          // all (and the server would ignore one anyway).
+          ...(keepForMyself
+            ? { aboutEmployee: employeePick, aboutManualName: employeeManualName }
+            : { assignedTo: employeePick, assignedToManualName: employeeManualName }),
         }),
       });
       const data = await res.json();
@@ -775,7 +922,12 @@
   }
 
   /* ─── EDIT ─── */
-  let editRow = null, editEmployeeChoices = null, editClientChoices = null, editStatusChoices = null;
+  let editRow = null, editEmployeeChoices = null, editClientChoices = null, editStatusChoices = null, editAboutChoices = null;
+
+  // A task someone kept for themselves: they are both its creator and its
+  // assignee. That is the only kind where "about" means anything, so it is the
+  // only kind that offers the field.
+  const isKeptReminder = (t) => Boolean(t.isMine && t.isCreator);
 
   function openEditDialog(row) {
     editRow = row;
@@ -783,12 +935,26 @@
     if (editEmployeeChoices) { editEmployeeChoices.destroy(); editEmployeeChoices = null; }
     if (editClientChoices)   { editClientChoices.destroy();   editClientChoices = null; }
     if (editStatusChoices)   { editStatusChoices.destroy();   editStatusChoices = null; }
+    if (editAboutChoices)    { editAboutChoices.destroy();    editAboutChoices = null; }
     editEmployeeChoices = buildEmployeeChoices("editEmployeeSelect", t.employeeId);
     editClientChoices   = buildClientChoices("editClientSelect", t.clientId);
     editStatusChoices   = buildStatusChoices("editStatusSelect", "editStatusWrap", t.status);
 
     toggleManualNameField("editAssignedToManualGroup", "editAssignedToManualInput", t.employeeId === OTHERS_VALUE);
     if (t.employeeId === OTHERS_VALUE) document.getElementById("editAssignedToManualInput").value = t.employeeManualName || "";
+
+    const kept = isKeptReminder(t);
+    document.getElementById("editAboutGroup").classList.toggle("hidden-field", !kept);
+    if (kept) {
+      editAboutChoices = buildEmployeeChoices("editAboutSelect", t.aboutId);
+      toggleManualNameField("editAboutManualGroup", "editAboutManualInput", t.aboutId === OTHERS_VALUE);
+      if (t.aboutId === OTHERS_VALUE) document.getElementById("editAboutManualInput").value = t.aboutManualName || "";
+      document.getElementById("editAboutSelect").addEventListener("change", (e) => {
+        toggleManualNameField("editAboutManualGroup", "editAboutManualInput", e.target.value === OTHERS_VALUE);
+      });
+    } else {
+      toggleManualNameField("editAboutManualGroup", "editAboutManualInput", false);
+    }
 
     toggleManualNameField("editClientManualGroup", "editClientManualInput", t.clientId === OTHERS_VALUE);
     if (t.clientId === OTHERS_VALUE) document.getElementById("editClientManualInput").value = t.clientManualName || "";
@@ -825,13 +991,26 @@
     if (!assignedTo) { showError("editTaskError", "Please select an employee."); return; }
     if (assignedTo === OTHERS_VALUE && !assignedToManualName) { showError("editTaskError", "Please enter the employee name."); return; }
     if (client === OTHERS_VALUE && !clientManualName) { showError("editTaskError", "Please enter the company / client name."); return; }
+
+    // Only sent for a kept reminder, where the field is on screen — so an
+    // ordinary edit of a sent task leaves whatever is stored untouched.
+    const kept = isKeptReminder(editRow.getData());
+    const aboutEmployee   = kept ? (editAboutChoices?.getValue(true) || "") : null;
+    const aboutManualName = kept ? document.getElementById("editAboutManualInput").value.trim() : "";
+    if (kept && aboutEmployee === OTHERS_VALUE && !aboutManualName) {
+      showError("editTaskError", "Please enter the name this reminder is about."); return;
+    }
+
     hideError("editTaskError");
     setLoading("editSubmitBtn", true);
     const row = editRow;
     try {
       const res  = await fetch(`/app/api/tasks/${row.getData()._id}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, label, assignedTo, assignedToManualName, client, clientManualName, dueDate, status }),
+        body: JSON.stringify({
+          title, label, assignedTo, assignedToManualName, client, clientManualName, dueDate, status,
+          ...(kept ? { aboutEmployee, aboutManualName } : {}),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -856,6 +1035,13 @@
           : (editClientChoices?.getValue()?.label || "—"),
         dueDate,
         status,
+        ...(kept ? {
+          aboutId:         aboutEmployee,
+          aboutManualName: aboutEmployee === OTHERS_VALUE ? aboutManualName : "",
+          aboutName:       !aboutEmployee ? ""
+            : aboutEmployee === OTHERS_VALUE ? aboutManualName
+            : (editAboutChoices?.getValue()?.label || ""),
+        } : {}),
       };
       Object.assign(row.getData(), patch);
       Object.assign(masterRow(row.getData()._id) || {}, patch);

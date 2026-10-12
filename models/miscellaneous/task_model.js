@@ -24,6 +24,21 @@ const taskSchema = new mongoose.Schema(
     // the employee is renamed, this copy is stale until the task is next saved.
     // For an "Others" assignee it holds assignedToOthers, the only name there is.
     assignedToName: { type: String, trim: true },
+    // Who the task CONCERNS, as opposed to who it belongs to — filled in when
+    // somebody keeps a reminder for themselves about another person ("follow
+    // up with RAVI"). The task is still the creator's: this is display context
+    // only.
+    //
+    // It is deliberately a field of its own and not a second meaning for
+    // assignedTo. No visibility query and no notification ever reads it, so a
+    // reminder kept ABOUT someone can never appear in that person's list or
+    // ring their bell — which is the whole point of having kept it.
+    //
+    // aboutEmployee is unset for a free-text name (the dialog's "Others"),
+    // where aboutEmployeeName is the only name there is; both are empty when
+    // the reminder is about nobody in particular.
+    aboutEmployee: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", index: true },
+    aboutEmployeeName: { type: String, trim: true },
     // Optional — a task doesn't have to be tied to a client/company. Same
     // Others pattern as assignedTo, for a client not in the Client list.
     client: { type: mongoose.Schema.Types.ObjectId, ref: "Client", index: true },
