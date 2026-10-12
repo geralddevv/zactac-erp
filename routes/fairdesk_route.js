@@ -45,6 +45,8 @@ import FacestockStock from "../models/inventory/facestockStock.js";
 import AdhesiveStock from "../models/inventory/adhesiveStock.js";
 import ReleaseLinerStock from "../models/inventory/releaseLinerStock.js";
 import CoreStock from "../models/inventory/coreStock.js";
+import FinishedStock from "../models/inventory/finishedStock.js";
+import MaintenanceRequest from "../models/system/maintenanceRequest.js";
 import { escapeRegex } from "../utils/security.js";
 import { getUserLocationNames, normalizeLocationName } from "../utils/locations.js";
 import { generateMaterialRollId } from "../utils/materialRollId.js";
@@ -425,6 +427,12 @@ router.use((req, res, next) => {
   if (role === "proprietor" || role === "admin" || role === "hod") return next();
 
   if (req.path === "/api/motivational") return next();
+
+  // The home dashboard (/welcome) and its data feed are open to every role that
+  // reaches this router -- the endpoint itself only returns the sections the
+  // caller's role is allowed to see (see GET /api/dashboard/summary), so there
+  // is nothing here to gate beyond "is signed in".
+  if (req.path === "/api/dashboard/summary") return next();
 
   // Company Tasks is open to every role that reaches this router (sales, hr —
   // not gated behind the narrower per-role allowlists below).
@@ -7993,13 +8001,293 @@ router.get("/api/motivational", (req, res) => {
   res.json(quote);
 });
 
+// ---------------------------------------------------------------------------
+// Home dashboard (/welcome)
+//
+// The landing page every non-operator role drops onto after login. It is the
+// app's "home screen": a greeting, a grid of quick-launch shortcuts, a row of
+// live KPI tiles and a couple of charts, all fed by GET /api/dashboard/summary
+// below. Both compute the SAME role flags, so the page never shows a tile for
+// something the caller can't open -- the flags mirror the side-nav gates in
+// views/layout/boilerplate.ejs.
+// ---------------------------------------------------------------------------
+function dashboardRoleFlags(authUser) {
+  const role = String(authUser?.role || "").toLowerCase();
+  const perms = (authUser && authUser.permissions) || {};
+  const isAdmin = role === "admin" || role === "proprietor";
+  const isHod = role === "hod";
+  const isSales = role === "sales";
+  const isHr = role === "hr";
+  return {
+    role,
+    isAdmin,
+    isHod,
+    isSales,
+    isHr,
+    // Mirror the boilerplate side-nav gates.
+    canView: isAdmin || isHod || isSales || Boolean(perms.master),
+    canStock: (isAdmin || isHod || Boolean(perms.inventory)) && !isSales,
+    canOrders: isAdmin || isHod || isSales || Boolean(perms.sales),
+    canProduction: isAdmin || isHod,
+    canPurchase: (isAdmin || isHod || Boolean(perms.inventory)) && !isSales,
+    canHrArea: (isAdmin || isHr || Boolean(perms.hr)) && !isSales,
+    canAccounting: (isAdmin || isHr || Boolean(perms.accounting)) && !isSales,
+  };
+}
+
+// Quick-launch tiles, built to match what the role can actually open. `accent`
+// keys a colour in the view's CSS; `icon` reuses the same Font Awesome glyphs
+// the side nav uses so the two read as one app.
+function dashboardShortcuts(f) {
+  const s = [];
+  const add = (label, href, icon, accent) => s.push({ label, href, icon, accent });
+
+  if (f.canOrders && !f.isSales) add("Sales Order", "/app/sales/order", "fa-solid fa-cart-plus", "blue");
+  if (f.canOrders) add("Pending Orders", "/app/sales/pending", "fa-solid fa-clock-rotate-left", "blue");
+  if (f.canProduction) {
+    add("Deckle Sorting", "/app/labels/production/deckle-set", "fa-solid fa-ruler-combined", "indigo");
+    add("Machine Queues", "/app/machine/queue", "fa-solid fa-list-check", "indigo");
+    add("WIP", "/app/labels/production/pending?tab=wip", "fa-solid fa-gears", "indigo");
+    add("Slitting", "/app/slitting/queue", "fa-solid fa-scissors", "indigo");
+    add("Deckle Calculator", "/app/labels/production/deckle-calculator", "fa-solid fa-calculator", "slate");
+  }
+  if (f.canStock) {
+    add("Finished Goods", "/app/finishedstock", "fa-solid fa-box", "green");
+    add("Facestock", "/app/facestockstock", "fa-solid fa-layer-group", "green");
+    add("Adhesive", "/app/adhesivestock", "fa-solid fa-droplet", "green");
+    add("Release Liner", "/app/releaselinerstock", "fa-solid fa-scroll", "green");
+  }
+  if (f.canView) {
+    add("SKUs List", "/app/label-stock/view", "fa-solid fa-boxes-stacked", "teal");
+    add("Clients", "/app/client/view", "fa-solid fa-user-tie", "teal");
+  }
+  if (f.canPurchase) {
+    add("Purchase Order", "/app/inventory/purchase/order", "fa-solid fa-file-invoice", "amber");
+    add("Re-Order", "/app/inventory/reorder", "fa-solid fa-cart-flatbed", "amber");
+  }
+  if (f.canHrArea) {
+    add("Employees", "/app/employee/view", "fa-solid fa-users", "violet");
+  }
+  // Open to every role that reaches this router. (Tasks lives in its own "My
+  // tasks" panel beside these shortcuts, so it isn't duplicated here.)
+  add("Daybook", "/app/daybook", "fa-solid fa-book-open", "slate");
+  add("Maintenance", "/app/maintenance", "fa-solid fa-screwdriver-wrench", "slate");
+  return s;
+}
+
 router.get("/welcome", (req, res) => {
+  const flags = dashboardRoleFlags(res.locals.authUser);
   res.render("miscellaneous/welcome.ejs", {
     title: "Welcome",
     CSS: false,
     JS: false,
     notification: req.flash("notification"),
+    dashFlags: flags,
+    dashShortcuts: dashboardShortcuts(flags),
   });
+});
+
+// Live data behind the home dashboard. Role-scoped: every section is guarded by
+// the same flags as the page, so a caller only ever receives what their role is
+// allowed to see. Each section is computed defensively -- one failing query
+// degrades to a missing section, never a 500 for the whole page.
+router.get("/api/dashboard/summary", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  const f = dashboardRoleFlags(res.locals.authUser);
+  const out = { kpis: {}, charts: {}, lists: {} };
+  const now = new Date();
+
+  const safe = async (fn) => {
+    try {
+      await fn();
+    } catch (e) {
+      // A single bad section must not take the dashboard down.
+      console.error("[dashboard] section failed:", e?.message || e);
+    }
+  };
+
+  const dayKey = (d) => {
+    const x = new Date(d);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  };
+  const sumAgg = (model, extra = {}) =>
+    model.aggregate([{ $match: { quantity: { $gt: 0 } } }, { $group: { _id: null, n: { $sum: "$quantity" }, ...extra } }]);
+
+  const jobs = [];
+
+  // ---- Orders (awaiting vs. in production) ----
+  if (f.canOrders || f.canProduction) {
+    jobs.push(
+      safe(async () => {
+        const [awaiting, inProduction] = await Promise.all([
+          PendingProduction.countDocuments({ assignedMachineId: null, producedAt: null, deckleBatchId: null }),
+          PendingProduction.countDocuments({ assignedMachineId: { $ne: null }, producedAt: null, deckleBatchId: null }),
+        ]);
+        out.kpis.ordersAwaiting = awaiting;
+        out.kpis.ordersInProduction = inProduction;
+      }),
+    );
+  }
+
+  // ---- Finished goods + raw material stock levels ----
+  if (f.canStock) {
+    jobs.push(
+      safe(async () => {
+        const [rolls, agg] = await Promise.all([
+          FinishedStock.countDocuments({ quantity: { $gt: 0 } }),
+          FinishedStock.aggregate([{ $match: { quantity: { $gt: 0 } } }, { $group: { _id: null, mtrs: { $sum: "$mtrs" } } }]),
+        ]);
+        out.kpis.finishedRolls = rolls;
+        out.kpis.finishedMtrs = Math.round(agg[0]?.mtrs || 0);
+      }),
+    );
+    jobs.push(
+      safe(async () => {
+        const [fs, ad, rl, cs] = await Promise.all([
+          sumAgg(FacestockStock, { kg: { $sum: "$reelMtrs" } }),
+          sumAgg(AdhesiveStock, { kg: { $sum: "$reelMtrs" } }),
+          sumAgg(ReleaseLinerStock, { kg: { $sum: "$reelMtrs" } }),
+          sumAgg(CoreStock),
+        ]);
+        out.kpis.facestock = { units: fs[0]?.n || 0, kg: Math.round(fs[0]?.kg || 0) };
+        out.kpis.adhesive = { units: ad[0]?.n || 0, kg: Math.round(ad[0]?.kg || 0) };
+        out.kpis.releaseLiner = { units: rl[0]?.n || 0, kg: Math.round(rl[0]?.kg || 0) };
+        out.kpis.core = { units: cs[0]?.n || 0 };
+      }),
+    );
+  }
+
+  // ---- Catalogue counts (SKUs, clients) ----
+  if (f.canView) {
+    jobs.push(
+      safe(async () => {
+        const [skus, clients] = await Promise.all([
+          SachikoLabelStock.countDocuments({}),
+          Username.countDocuments({}),
+        ]);
+        out.kpis.skus = skus;
+        out.kpis.clients = clients;
+      }),
+    );
+  }
+
+  // ---- HR headcount ----
+  if (f.canHrArea) {
+    jobs.push(
+      safe(async () => {
+        out.kpis.employees = await Employee.countDocuments({});
+      }),
+    );
+  }
+
+  // ---- Open maintenance (every role raises/sees tickets) ----
+  jobs.push(
+    safe(async () => {
+      out.kpis.maintenanceOpen = await MaintenanceRequest.countDocuments({ status: { $in: ["OPEN", "IN PROGRESS"] } });
+    }),
+  );
+
+  // ---- My tasks (assigned to me, still open) ----
+  jobs.push(
+    safe(async () => {
+      const empId = await sessionEmployeeId(req);
+      if (!empId) {
+        out.kpis.tasks = { open: 0, overdue: 0, dueToday: 0 };
+        out.lists.tasks = [];
+        return;
+      }
+      const todayEnd = new Date(now);
+      todayEnd.setHours(23, 59, 59, 999);
+      const rows = await Task.find({ assignedTo: empId, deletedAt: null, status: { $ne: "COMPLETED" } })
+        .sort({ dueDate: 1, createdAt: -1 })
+        .limit(6)
+        .lean();
+      const [open, overdue, dueToday] = await Promise.all([
+        Task.countDocuments({ assignedTo: empId, deletedAt: null, status: { $ne: "COMPLETED" } }),
+        Task.countDocuments({ assignedTo: empId, deletedAt: null, status: { $ne: "COMPLETED" }, dueDate: { $lt: now } }),
+        Task.countDocuments({ assignedTo: empId, deletedAt: null, status: { $ne: "COMPLETED" }, dueDate: { $gte: now, $lte: todayEnd } }),
+      ]);
+      out.kpis.tasks = { open, overdue, dueToday };
+      out.lists.tasks = rows.map((t) => ({
+        id: String(t._id),
+        title: t.title,
+        status: t.status,
+        dueDate: t.dueDate || null,
+        createdByName: t.createdByName || t.createdBy || "",
+      }));
+    }),
+  );
+
+  // ---- Chart: sales orders received, last 8 weeks ----
+  if (f.canOrders) {
+    jobs.push(
+      safe(async () => {
+        const weeks = 8;
+        const start = new Date(now);
+        start.setHours(0, 0, 0, 0);
+        // Monday-anchored window: back to the Monday (weeks-1) weeks ago.
+        const dow = (start.getDay() + 6) % 7; // 0 = Monday
+        start.setDate(start.getDate() - dow - (weeks - 1) * 7);
+        // Label Stock orders are TapeSalesOrder rows with onModel ===
+        // "SachikoLabelStock" (see utils/pendingProduction.js); the standalone
+        // SachikoSalesOrder collection is unused here. "Received" = when the
+        // order was placed (createdAt).
+        const rows = await TapeSalesOrder.aggregate([
+          { $match: { onModel: "SachikoLabelStock", createdAt: { $gte: start } } },
+          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, n: { $sum: 1 } } },
+        ]);
+        const perDay = new Map(rows.map((r) => [r._id, r.n]));
+        const buckets = [];
+        for (let w = 0; w < weeks; w++) {
+          const wkStart = new Date(start);
+          wkStart.setDate(start.getDate() + w * 7);
+          let n = 0;
+          for (let d = 0; d < 7; d++) {
+            const day = new Date(wkStart);
+            day.setDate(wkStart.getDate() + d);
+            n += perDay.get(dayKey(day)) || 0;
+          }
+          buckets.push({
+            label: wkStart.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+            value: n,
+          });
+        }
+        out.charts.ordersByWeek = buckets;
+      }),
+    );
+  }
+
+  // ---- Chart: finished rolls produced, last 14 days ----
+  if (f.canProduction || f.canStock) {
+    jobs.push(
+      safe(async () => {
+        const days = 14;
+        const start = new Date(now);
+        start.setHours(0, 0, 0, 0);
+        start.setDate(start.getDate() - (days - 1));
+        const rows = await FinishedStock.aggregate([
+          { $match: { createdAt: { $gte: start } } },
+          { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, rolls: { $sum: 1 }, mtrs: { $sum: "$mtrs" } } },
+        ]);
+        const perDay = new Map(rows.map((r) => [r._id, r]));
+        const series = [];
+        for (let d = 0; d < days; d++) {
+          const day = new Date(start);
+          day.setDate(start.getDate() + d);
+          const hit = perDay.get(dayKey(day));
+          series.push({
+            label: day.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+            rolls: hit?.rolls || 0,
+            mtrs: Math.round(hit?.mtrs || 0),
+          });
+        }
+        out.charts.productionByDay = series;
+      }),
+    );
+  }
+
+  await Promise.all(jobs);
+  res.json(out);
 });
 
 export default router;

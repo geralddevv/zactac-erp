@@ -16,7 +16,7 @@
     <link rel="stylesheet" href="/bootstrap/css/bootstrap.min.css" />
     <link rel="stylesheet" href="/css/choices.min.css" />
     <!-- <link rel="stylesheet" href="/css/ratecalculator.css" /> -->
-    <link rel="stylesheet" href="/css/common.css?v=8" />
+    <link rel="stylesheet" href="/css/common.css?v=9" />
     <% if (CSS) { %>
     <link rel="stylesheet" href="/css/<%= CSS %>?v=r3" />
     <% } %>
@@ -110,57 +110,18 @@
         background: linear-gradient(180deg, #044a78 0%, #03365a 100%);
       }
 
-      .nav-opt-wrap {
-        background-color: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-      }
-
-      .nav-opt-wrap > .nav-items:first-child {
-        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-      }
-
+      /* Icon-only collapsed rail (50px): no panel chrome, just the icons.
+         The rows, colours and the indent guide live in the <style> block at
+         the foot of <body> -- the last stylesheet in the document, and so the
+         one place that settles how the nav looks. */
       .side-nav:not(.nav-panel-toggle) .nav-opt-wrap {
         width: 40px;
         background-color: transparent;
         border: none;
       }
-      
+
       .side-nav:not(.nav-panel-toggle) .nav-opt-wrap > .nav-items:first-child {
         border-bottom: none;
-      }
-
-      .nav-items {
-        min-height: 3.6rem;
-        padding: 8px 12px;
-        gap: 10px;
-        border: 1px solid transparent;
-        display: flex;
-        align-items: center;
-      }
-
-      .nav-items i {
-        font-size: 16px;
-        opacity: 0.95;
-      }
-
-      .nav-items-para {
-        font-size: 13px;
-        font-weight: 500;
-        letter-spacing: 0.2px;
-        line-height: 1.2;
-      }
-
-      .nav-items:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-      }
-
-      .nav-items.active {
-        background-color: #022a45;
-        border: 1px solid rgba(255, 255, 255, 0.5);
-      }
-
-      .nav-items.active .nav-items-para {
-        font-weight: 600;
       }
 
       /* Side-nav scrollbar width */
@@ -903,18 +864,380 @@
         background: #f0f9ff;
         transform: translateY(-1px);
       }
-      .nav-opt-wrap .fa-chevron-down {
-        transform: rotate(-90deg);
-      }
-      .nav-opt-wrap.is-open .fa-chevron-down {
-        transform: rotate(0deg);
+      /* ===================== SIDE NAV: A TWO-LEVEL TREE =====================
+         The nav is group -> page, but both levels were drawn with the same
+         .nav-items box, so a page inside a group looked exactly like a
+         top-level tab. The only hint of nesting was a 2px white border
+         hand-placed on the first and last child of most groups, which marks
+         where a group ends without ever saying what belongs to it.
+
+         So the nesting is drawn instead, the way a file tree draws it: one
+         vertical indent guide down each open group, aligned under the centre
+         of that group's own icon, with the current page lighting its own
+         segment of the guide. Shut groups that hold the current page carry
+         the same accent on their header, so the trail to where you are is
+         never hidden.
+
+         This is the last stylesheet in the document, so it owns the nav's
+         metrics, colours and states; common.css and the <head> block are the
+         base it overrides. common.js wires the behaviour (aria-expanded,
+         .has-active, remembered open groups, arrow keys). */
+
+      .side-nav {
+        --nav-ink: #ffffff;
+        --nav-ink-dim: rgba(255, 255, 255, 0.82);
+        --nav-accent: #7cc4f2; /* current page, and the trail to it */
+        --nav-guide: rgba(255, 255, 255, 0.3);
+        /* Guide x == centre of a group icon: 10px row padding + half of a
+           16px icon. Change the row padding and this follows. */
+        --nav-indent: 18px;
+        --nav-rule: rgba(255, 255, 255, 0.14);
+        gap: 3px;
+        padding: 6px 5px 0;
+        align-items: stretch;
       }
 
-      /* Distinguish an open tab's content from the collapsed header */
-      .nav-opt-wrap.is-open .nav-labels-opt {
-        background-color: rgba(2, 34, 56, 0.55);
-        border-radius: 0.4rem;
-        padding: 4px 0;
+      /* 175px cut "Semi Finished Goods" and "Deckle Calculator" mid-word; 200
+         fits the longest page name in the tree at this size without wrapping,
+         and the rows below are short enough that the extra width costs
+         nothing. */
+      .side-nav.nav-panel-toggle {
+        width: 200px;
+        min-width: 200px;
+        flex: 0 0 200px;
+      }
+
+      /* ---- rows: a little over half the old 3.6rem, so an admin's whole
+         tree fits on a laptop screen without scrolling ---- */
+      .nav-items {
+        min-height: 40px;
+        height: auto;
+        padding: 7px 10px;
+        /* common.css sets transition: none, so every hover landed as a hard
+           cut -- on the dark recess especially, where the step is largest,
+           that reads as the row flashing at you rather than responding. */
+        transition: background-color 0.16s ease, color 0.16s ease;
+        gap: 10px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        position: relative;
+      }
+
+      /* A finger needs the bigger target back. */
+      @media (hover: none) and (pointer: coarse) {
+        .nav-items {
+          min-height: 44px;
+        }
+      }
+
+      .nav-items i {
+        font-size: 16px;
+        width: 16px;
+        flex: 0 0 16px;
+        text-align: center;
+        opacity: 0.9;
+      }
+
+      .nav-items-para {
+        font-size: 14.5px;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+        line-height: 1.3;
+        color: var(--nav-ink-dim);
+      }
+
+      /* ---- level 1: a group header, or a page that is its own tab ----
+         Dashboard, Maintenance, Tasks and Daybook sit at the top level
+         without a group around them, so they read at a group header's weight
+         rather than a page's -- they are tabs, not something's contents. */
+      .nav-opt-wrap {
+        position: relative;
+        background-color: transparent;
+        border: none;
+        border-radius: 6px;
+      }
+
+      .side-nav > .nav-items,
+      .nav-opt-wrap > .nav-items {
+        font-weight: 600;
+      }
+
+      .side-nav > .nav-items .nav-items-para,
+      .nav-opt-wrap > .nav-items .nav-items-para {
+        color: var(--nav-ink);
+      }
+
+      .nav-opt-wrap > .nav-items:first-child {
+        border-bottom: none;
+      }
+
+      /* ---- an open group reads as one recessed panel ----
+         Open and shut once looked near enough the same, so an open group bled
+         into the tabs around it. Two things it is deliberately NOT: boxed in
+         (a border, a drop shadow and a solid header plate turn the nav into a
+         stack of widgets), and lightened (every label in here is white, and
+         lifting the ground under white text is the one direction that costs
+         contrast).
+
+         So an open group sinks instead. The whole group -- header and pages
+         together -- sits in a dark recess with generous corners, held apart
+         from its neighbours by air rather than by a line, and the white text
+         reads better inside it than anywhere else in the nav. Darkening is a
+         black wash rather than a fixed colour, so it deepens by the same
+         amount at the top of the side-nav's gradient as at the bottom. */
+      .nav-opt-wrap.is-open {
+        background-color: rgba(0, 16, 30, 0.42);
+        border-radius: 10px;
+        margin: 6px 0;
+      }
+
+      /* The air around the panel is the separator here; the hairline between
+         tabs would only clutter its edge. */
+      .nav-opt-wrap.is-open::after {
+        display: none;
+      }
+
+      /* The header is the one row that is not sunk, so it sits at the top of
+         the recess rather than inside it -- marked by that step alone, plus
+         its weight. No plate, no rule under it. */
+      .nav-opt-wrap.is-open > .nav-items:first-child {
+        background-color: rgba(0, 16, 30, 0.12);
+        border-radius: 10px 10px 0 0;
+      }
+
+      .nav-opt-wrap.is-open > .nav-items:first-child .nav-items-para {
+        font-weight: 600;
+      }
+
+      .nav-opt-wrap.is-open > .nav-items:first-child i,
+      .nav-opt-wrap.is-open > .nav-items:first-child .fa-chevron-down {
+        opacity: 1;
+      }
+
+      /* .nav-items:hover is the weaker selector, so without this the open
+         header is the one row in the nav that ignores the mouse. */
+      .nav-opt-wrap.is-open > .nav-items:first-child:hover {
+        background-color: rgba(255, 255, 255, 0.07);
+      }
+
+      /* The twisty. aria-expanded on the header carries the state for a
+         screen reader, and common.js marks every nav icon aria-hidden, so
+         this is decoration. font-size fights an inline 12px in the markup. */
+      .nav-opt-wrap .fa-chevron-down {
+        margin-left: auto;
+        font-size: 10px !important;
+        opacity: 0.6;
+        transform: rotate(-90deg);
+      }
+
+      .nav-opt-wrap.is-open .fa-chevron-down {
+        transform: rotate(0deg);
+        opacity: 0.9;
+      }
+
+      /* ---- horizontal rules ----
+         One line between every top-level entry, so the tabs read as a list of
+         separate things rather than one run of text. The markup used to do
+         this with a 2px white border pinned to the first and last child of
+         some groups, which drew a boundary in some places and not others;
+         this draws one everywhere, from one rule.
+
+         Drawn as a pseudo-element rather than a border because .nav-items
+         carries a 1px transparent border that the hover and active states
+         reset -- a border here would blink out whenever you moused over a
+         tab. The line is inset from both edges so it reads as a separator
+         between rows, not a frame around them. */
+      .side-nav > .nav-opt-wrap::after,
+      .side-nav > .nav-items::after {
+        content: "";
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: -2px;
+        height: 1px;
+        background-color: var(--nav-rule);
+      }
+
+      /* The watermark brings its own top border. */
+      .side-nav > *:has(+ .side-nav-watermark)::after {
+        display: none;
+      }
+
+      /* Inside a group the pages get a fainter line, starting at the indent
+         so it belongs to the tree rather than cutting across the guide. The
+         first page needs none: the header plate above it is the boundary. */
+      .nav-labels-opt .nav-items + .nav-items::after {
+        content: "";
+        position: absolute;
+        left: 30px;
+        right: 8px;
+        top: -2px;
+        height: 1px;
+        background-color: rgba(255, 255, 255, 0.1);
+      }
+
+      /* ---- level 2: the group's pages, hanging off the indent guide ---- */
+      .nav-labels-opt {
+        position: relative;
+      }
+
+      .nav-opt-wrap.is-open > .nav-labels-opt {
+        background-color: transparent;
+        padding: 4px 0 6px;
+      }
+
+      /* The guide: one hairline down the whole group. It stops short of the
+         bottom so it reads as ending inside the group rather than running
+         into the next one. */
+      .nav-opt-wrap.is-open > .nav-labels-opt::before {
+        content: "";
+        position: absolute;
+        left: var(--nav-indent);
+        top: 0;
+        bottom: 6px;
+        width: 1px;
+        background-color: var(--nav-guide);
+      }
+
+      .nav-labels-opt .nav-items {
+        min-height: 36px;
+        padding-left: 30px; /* clears the guide */
+        /* The markup pins a 2px white border to the first and last child of
+           most groups to fake a group boundary. The guide says it better, and
+           those borders now just cut the guide in two -- dropped here rather
+           than unpicking some forty inline styles in the EJS. */
+        border-top-width: 0 !important;
+        border-bottom-width: 0 !important;
+      }
+
+      .nav-labels-opt .nav-items i {
+        font-size: 15px;
+        opacity: 0.78;
+      }
+
+      .nav-labels-opt .nav-items .nav-items-para {
+        font-size: 14px;
+      }
+
+      /* Sub-headings inside a group ("View", "Entry", "Deckle") are
+         hand-styled <div>s in the markup. navSearch.js reads them to build a
+         page's path in the Ctrl+K list, so the structure is left alone and
+         only the spacing is tightened -- hence the !important over the inline
+         style. Headings hidden app-wide stay hidden: display is untouched. */
+      .nav-labels-opt > div:not(.nav-items) {
+        margin: 8px 10px 2px 30px !important;
+        padding-bottom: 3px !important;
+        /* The markup rules each heading off at 0.35 white. Beside the guide
+           that is two lines saying the same thing and the heavier one wins,
+           so the rule is dropped back to a hint of one. */
+        border-bottom-color: rgba(255, 255, 255, 0.16) !important;
+      }
+
+      .nav-labels-opt > div:not(.nav-items) p {
+        font-size: 11.5px !important;
+        letter-spacing: 1px !important;
+      }
+
+      /* ---- hover, the current page, and the trail to it ---- */
+      .nav-items:hover {
+        background-color: rgba(255, 255, 255, 0.08);
+      }
+
+      /* Inside the recess the ground is much darker, so the same overlay is a
+         far bigger relative jump. Half a step there lands about where the
+         others do. */
+      .nav-opt-wrap.is-open .nav-labels-opt .nav-items:hover {
+        background-color: rgba(255, 255, 255, 0.055);
+      }
+
+      .nav-items:hover .nav-items-para {
+        color: var(--nav-ink);
+      }
+
+      .nav-items:focus-visible {
+        outline: 2px solid var(--nav-accent);
+        outline-offset: -2px;
+        background-color: rgba(255, 255, 255, 0.09);
+      }
+
+      /* The open group's own wash sits under this, so the current page needs
+         a little more accent than it would on bare background to stay the
+         brightest thing in the group. */
+      .nav-items.active {
+        background-color: rgba(124, 196, 242, 0.22);
+        border: 1px solid transparent;
+      }
+
+      .nav-items.active .nav-items-para {
+        color: var(--nav-ink);
+        font-weight: 600;
+      }
+
+      .nav-items.active i {
+        opacity: 1;
+      }
+
+      /* The current page lights its segment of the guide, so the group reads
+         at a glance instead of being scanned for a highlighted row. */
+      .nav-labels-opt .nav-items.active::before {
+        content: "";
+        position: absolute;
+        left: var(--nav-indent);
+        top: 2px;
+        bottom: 2px;
+        width: 2px;
+        border-radius: 1px;
+        background-color: var(--nav-accent);
+      }
+
+      /* A standalone page (Dashboard, Maintenance, Tasks, Daybook) has no
+         guide to light, so its marker sits at its own left edge. */
+      .side-nav > .nav-items.active::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 4px;
+        bottom: 4px;
+        width: 3px;
+        border-radius: 0 2px 2px 0;
+        background-color: var(--nav-accent);
+      }
+
+      /* common.js marks the group the current page lives in. Without it a
+         shut group gives no clue that it holds the page you are on. */
+      .nav-opt-wrap.has-active > .nav-items::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 6px;
+        bottom: 6px;
+        width: 3px;
+        border-radius: 0 2px 2px 0;
+        background-color: var(--nav-accent);
+        opacity: 0.85;
+      }
+
+      .nav-opt-wrap.has-active:not(.is-open) > .nav-items {
+        background-color: rgba(124, 196, 242, 0.12);
+      }
+
+      /* The collapsed 50px rail has no room for a guide or an indent. */
+      .side-nav:not(.nav-panel-toggle) .nav-labels-opt .nav-items {
+        padding-left: 0;
+      }
+
+      .side-nav:not(.nav-panel-toggle) .nav-opt-wrap.is-open > .nav-labels-opt::before {
+        display: none;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .nav-items,
+        .nav-labels-opt,
+        .nav-opt-wrap .fa-chevron-down {
+          transition: none !important;
+        }
       }
     </style>
     <% const isAdmin = authUser && (authUser.role === "admin" || authUser.role === "proprietor"); %>
@@ -1463,7 +1786,7 @@
       </div>
     </div>
 
-    <script src="/js/common.js?v=pwa-1" defer></script>
+    <script src="/js/common.js?v=pwa-2" defer></script>
     <%# After common.js (defer keeps the order), so the bell's POSTs go through
         that file's CSRF-injecting fetch wrapper. %>
     <script src="/js/notifications.js?v=1" defer></script>

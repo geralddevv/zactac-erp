@@ -215,74 +215,204 @@
 
 
 
-  // ================= GENERIC NAV GROUP TOGGLE =================
+  // ================= SIDE NAV: A TWO-LEVEL TREE =================
+  // The nav is group -> page. The CSS draws the nesting (an indent guide down
+  // each open group, the current page lighting its own segment of it); this
+  // makes it operable, and says in words what the drawing says in pixels:
+  //
+  //   * aria-expanded / role / tabindex, wired here because the group headers
+  //     are <div>s in the EJS -- doing it in the markup would mean the same
+  //     three attributes repeated across a dozen blocks, each able to drift;
+  //   * .has-active, marking the group that holds the current page, so the
+  //     trail shows even while that group is shut;
+  //   * which groups are open, remembered between page loads: without it,
+  //     opening Masters and clicking through to Daybook shuts Masters again;
+  //   * arrow keys, walking the tree the way a file explorer does.
 
-  function toggleNavGroup(wrapper) {
+  const NAV_OPEN_KEY = "fd_navOpenGroups";
+
+  const navGroupToggle = (wrapper) => wrapper.querySelector(":scope > .nav-items");
+
+  // The header's own label is the group's identity -- there is no id in the
+  // markup, and the label is what the user is choosing to keep open.
+  const navGroupLabel = (wrapper) =>
+    (navGroupToggle(wrapper)?.querySelector(".nav-items-para")?.textContent || "").trim();
+
+  // Storage can be missing or throw outright (private window, blocked site
+  // data), in which case the nav simply stops remembering. It never fails to
+  // render over it, so every read and write is wrapped.
+  const navReadOpen = () => {
+    try {
+      const raw = localStorage.getItem(NAV_OPEN_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(list) ? list : []);
+    } catch (err) {
+      return new Set();
+    }
+  };
+
+  const navWriteOpen = (open) => {
+    try {
+      localStorage.setItem(NAV_OPEN_KEY, JSON.stringify([...open]));
+    } catch (err) {
+      /* nothing to do -- see above */
+    }
+  };
+
+  function setNavGroup(wrapper, open, { remember = true } = {}) {
     const menu = wrapper.querySelector(".nav-labels-opt");
     if (!menu) return;
 
-    const isOpen = menu.style.height && menu.style.height !== "0px";
+    wrapper.classList.toggle("is-open", open);
+    navGroupToggle(wrapper)?.setAttribute("aria-expanded", String(open));
 
-    if (isOpen) {
-      menu.style.height = "0px";
-      wrapper.classList.remove("is-open");
-    } else {
-      const scrollH = menu.scrollHeight;
-      menu.style.height = (scrollH > 0 ? scrollH : 500) + "px"; // Fallback to 500 if scrollHeight is 0
-      wrapper.classList.add("is-open");
-    }
+    // Measured AFTER the class lands: the open state adds vertical padding to
+    // the panel, so a height read before it is short by that padding and
+    // clips the last page in the group.
+    menu.style.height = open ? (menu.scrollHeight || 500) + "px" : "0px";
+
+    if (!remember) return;
+    const label = navGroupLabel(wrapper);
+    if (!label) return;
+    const stored = navReadOpen();
+    if (open) stored.add(label);
+    else stored.delete(label);
+    navWriteOpen(stored);
   }
 
-  window.addEventListener("DOMContentLoaded", () => {
-    document.querySelectorAll(".nav-opt-wrap").forEach((wrapper) => {
+  // Every row you can currently reach: group headers, the pages of open
+  // groups, and the standalone links. A page inside a shut group is not
+  // reachable -- the panel is clipped to no height, which leaves the row a
+  // box all the same, so the group's own state is what decides. A row hidden
+  // app-wide (inline display:none) has no offsetParent and drops out here.
+  function navRows() {
+    if (!sideNav) return [];
+    return [...sideNav.querySelectorAll(".nav-items")].filter((row) => {
+      const panel = row.closest(".nav-labels-opt");
+      if (panel && !panel.parentElement.classList.contains("is-open")) return false;
+      return row.offsetParent !== null;
+    });
+  }
+
+  function navMove(from, step) {
+    const rows = navRows();
+    const at = rows.indexOf(from);
+    if (at < 0) return;
+    rows[(at + step + rows.length) % rows.length]?.focus();
+  }
+
+  (function initSideNavTree() {
+    if (!sideNav) return;
+
+    sideNav.setAttribute("role", "navigation");
+    if (!sideNav.getAttribute("aria-label")) sideNav.setAttribute("aria-label", "Main navigation");
+
+    // Icons are decoration: a row's own text, and aria-expanded on a group
+    // header, already carry everything a screen reader needs.
+    sideNav.querySelectorAll(".nav-items i").forEach((icon) => icon.setAttribute("aria-hidden", "true"));
+
+    // More than one row can carry .active -- several pages ("Stock Summary")
+    // appear in two or three groups with one copy hidden app-wide. Only a
+    // visible one is the page you are on, so only a visible one marks a trail.
+    const actives = [...sideNav.querySelectorAll(".nav-items.active")].filter(
+      (row) => row.offsetParent !== null
+    );
+    actives.forEach((row) => {
+      row.setAttribute("aria-current", "page");
+      row.closest(".nav-opt-wrap")?.classList.add("has-active");
+    });
+
+    const stored = navReadOpen();
+
+    sideNav.querySelectorAll(".nav-opt-wrap").forEach((wrapper) => {
       const menu = wrapper.querySelector(".nav-labels-opt");
-      if (!menu) return;
+      const toggle = navGroupToggle(wrapper);
+      if (!menu || !toggle) return;
 
-      // Disable animation for initial open
-      menu.classList.add("no-transition");
-
-      // Open a group on load when it holds the current page, or when the layout
-      // marked it data-open-default (a role whose sidebar is just this group).
-      if (menu.querySelector(".nav-items.active") || wrapper.hasAttribute("data-open-default")) {
-        menu.style.height = menu.scrollHeight + "px";
-        wrapper.classList.add("is-open");
+      // A header that is itself a link (SKUs List -> /app/label-stock/view)
+      // navigates on click: its group only ever holds the one page it already
+      // points at, so there is nothing to expand and it stays a plain link.
+      const isLink = toggle.tagName === "A";
+      if (!isLink) {
+        toggle.setAttribute("role", "button");
+        toggle.setAttribute("tabindex", "0");
       }
 
+      const label = navGroupLabel(wrapper);
+      const openNow =
+        wrapper.classList.contains("has-active") ||
+        wrapper.hasAttribute("data-open-default") ||
+        (!!label && stored.has(label));
 
-      // Re-enable animation AFTER paint
+      // Whatever state the page loads in is the state it was always in -- no
+      // animation for it, or every page load plays the nav opening itself.
+      menu.classList.add("no-transition");
+      setNavGroup(wrapper, openNow, { remember: false });
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          menu.classList.remove("no-transition");
-        });
+        requestAnimationFrame(() => menu.classList.remove("no-transition"));
+      });
+
+      if (isLink) return;
+
+      toggle.addEventListener("click", (e) => {
+        if (e.target.closest(".nav-labels-opt")) return;
+        e.stopPropagation();
+        setNavGroup(wrapper, !wrapper.classList.contains("is-open"));
+      });
+
+      // A <div> with role="button" gets none of a real button's keyboard
+      // handling for free.
+      toggle.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+          e.preventDefault(); // Space would scroll the page
+          setNavGroup(wrapper, !wrapper.classList.contains("is-open"));
+        }
       });
     });
-  });
 
-  // Attach toggle to ALL nav groups
-  document.querySelectorAll(".nav-opt-wrap").forEach((wrapper) => {
-    const toggle = wrapper.querySelector(":scope > .nav-items");
-    if (!toggle) return;
-
-    toggle.addEventListener("click", (e) => {
-      if (e.target.closest(".nav-labels-opt")) return;
-
-      // A toggle that's a real link (SKUs List -> /sachiko/label-stock/view)
-      // just navigates on click. Its group only ever holds one sub-item that
-      // points at the same page, so there's nothing to expand -- the group
-      // still auto-opens on that page via the .nav-items.active check above.
-      if (toggle.tagName === "A") return;
-
-      e.stopPropagation();
-      toggleNavGroup(wrapper);
+    // Clicking a page must not also toggle the group it sits in.
+    sideNav.querySelectorAll(".nav-opt-wrap .nav-labels-opt").forEach((menu) => {
+      menu.addEventListener("click", (e) => e.stopPropagation());
     });
-  });
 
-  // Prevent option clicks from closing the dropdown
-  document.querySelectorAll(".nav-opt-wrap .nav-labels-opt").forEach((menu) => {
-    menu.addEventListener("click", (e) => {
-      e.stopPropagation();
+    sideNav.addEventListener("keydown", (e) => {
+      const row = e.target.closest(".nav-items");
+      if (!row || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const wrapper = row.closest(".nav-opt-wrap");
+      // A link header has no open state, so left/right do nothing on it.
+      const isHeader = !!wrapper && row === navGroupToggle(wrapper) && row.tagName !== "A";
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        navMove(row, 1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        navMove(row, -1);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        navRows()[0]?.focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        navRows().slice(-1)[0]?.focus();
+      } else if (e.key === "ArrowRight" && isHeader) {
+        e.preventDefault();
+        // Open it; once open, step into the first page under it.
+        if (wrapper.classList.contains("is-open")) navMove(row, 1);
+        else setNavGroup(wrapper, true);
+      } else if (e.key === "ArrowLeft" && wrapper) {
+        e.preventDefault();
+        // On a page, go up to its group header; on an open header, shut it.
+        if (isHeader && wrapper.classList.contains("is-open")) setNavGroup(wrapper, false);
+        else if (!isHeader) navGroupToggle(wrapper)?.focus();
+      }
     });
-  });
+
+    // On a tree long enough to scroll, open it on the page you are actually
+    // on. "nearest" so a page already in view doesn't jump.
+    if (actives[0] && sideNav.scrollHeight > sideNav.clientHeight) {
+      actives[0].scrollIntoView({ block: "nearest" });
+    }
+  })();
 
   // ================= INPUT UPPERCASE =================
 

@@ -1,243 +1,785 @@
 <% layout('/layout/boilerplate') %>
 
-<div class="welcome-shell">
-    <div class="welcome-card">
-        <div class="welcome-header">
-            <div class="profile-circle">
-                <% if (authUser?.empPhoto) { %>
-                    <img src="/images/empimg/<%= authUser.empPhoto %>" alt="Profile">
+<%# Home dashboard. Shell renders instantly; KPI tiles and charts are filled
+    from GET /api/dashboard/summary (role-scoped). Shortcuts + role flags are
+    computed in the route (dashboardShortcuts / dashboardRoleFlags) and embedded
+    below as JSON -- never interpolated into script/onclick. %>
+
+<script id="dash-shortcuts" type="application/json"><%- safeJson(dashShortcuts || []) %></script>
+<script id="dash-flags" type="application/json"><%- safeJson(dashFlags || {}) %></script>
+<script id="dash-user" type="application/json"><%- safeJson({ name: (authUser && (authUser.empName || authUser.username)) || 'there', role: authUser && authUser.role }) %></script>
+
+<div class="dash">
+    <!-- Hero -->
+    <section class="dash-hero">
+        <div class="dash-hero-main">
+            <div class="dash-avatar">
+                <% if (authUser && authUser.empPhoto) { %>
+                    <img src="/images/empimg/<%= authUser.empPhoto %>" alt="Profile photo">
                 <% } else { %>
-                    <img src="/assets/aimerz-icon.svg" alt="Aimerz" style="width: 60%; height: 60%; object-fit: contain;">
+                    <%= ((authUser && (authUser.empName || authUser.username)) || 'U').trim().charAt(0).toUpperCase() %>
                 <% } %>
             </div>
-            
-            <div class="welcome-text-group">
-                <h1 class="welcome-title">
-                    Welcome,<br>
-                    <span class="highlight-text"><%= authUser?.empName || authUser?.username %></span>
-                </h1>
-                <p class="welcome-subtitle">We're glad to see you back. Your dashboard is ready with all the latest updates.</p>
+            <div class="dash-hero-text">
+                <p class="dash-greeting" id="dashGreeting">Welcome</p>
+                <h1 class="dash-name"><%= (authUser && (authUser.empName || authUser.username)) || 'Welcome' %></h1>
+                <p class="dash-quote" id="dashQuote">"Quality is not an act, it is a habit."</p>
             </div>
         </div>
-        
-        <div class="info-grid">
-            <div class="info-item">
-                <span class="info-label">Name</span>
-                <span class="info-value"><%= authUser?.empName || authUser?.username %></span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Profile Code</span>
-                <span class="info-value"><%= authUser?.profileCode || 'N/A' %></span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Role</span>
-                <span class="info-value"><%= authUser?.role?.toUpperCase() %></span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Today</span>
-                <span class="info-value"><%= new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) %></span>
-            </div>
+        <div class="dash-hero-side">
+            <div class="dash-clock" id="dashClock">--:--</div>
+            <div class="dash-date" id="dashDate"><%= new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) %></div>
+            <div class="dash-role-chip"><i class="fa-solid fa-user-shield"></i> <%= (authUser && authUser.role ? authUser.role : 'user').toUpperCase() %></div>
         </div>
+    </section>
 
-        <div id="quote-container" class="quote-box">
-            <i class="fa-solid fa-quote-left quote-icon"></i>
-            <p id="quote-text" class="quote-text">"Loading inspiration..."</p>
+    <!-- At a glance (KPI tiles) -->
+    <section class="dash-section">
+        <div class="dash-section-head">
+            <h2><i class="fa-solid fa-gauge-high"></i> At a glance</h2>
+            <button type="button" class="dash-refresh" id="dashRefresh" title="Refresh data">
+                <i class="fa-solid fa-rotate-right"></i>
+            </button>
         </div>
-    </div>
+        <div class="dash-kpis" id="dashKpis">
+            <%# Skeleton tiles until data lands %>
+            <% for (let i = 0; i < 6; i++) { %>
+            <div class="kpi-tile is-skeleton"><div class="kpi-sk-icon"></div><div class="kpi-sk-lines"><span></span><span></span></div></div>
+            <% } %>
+        </div>
+    </section>
+
+    <!-- Charts -->
+    <section class="dash-section" id="dashChartsSection" style="display:none;">
+        <div class="dash-section-head"><h2><i class="fa-solid fa-chart-column"></i> Trends</h2></div>
+        <div class="dash-charts">
+            <div class="dash-card" id="cardOrders" style="display:none;">
+                <div class="dash-card-head">
+                    <h3>Sales orders received</h3>
+                    <span class="dash-card-sub">Last 8 weeks</span>
+                </div>
+                <div class="dash-canvas-wrap"><canvas id="chartOrders" height="200"></canvas></div>
+            </div>
+            <div class="dash-card" id="cardProduction" style="display:none;">
+                <div class="dash-card-head">
+                    <h3>Finished rolls produced</h3>
+                    <span class="dash-card-sub">Last 14 days</span>
+                </div>
+                <div class="dash-canvas-wrap"><canvas id="chartProduction" height="200"></canvas></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Shortcuts + Tasks -->
+    <section class="dash-section">
+        <div class="dash-lower">
+            <div class="dash-lower-main">
+                <div class="dash-section-head"><h2><i class="fa-solid fa-bolt"></i> Quick access</h2></div>
+                <div class="dash-shortcuts" id="dashShortcuts"></div>
+            </div>
+            <aside class="dash-lower-side">
+                <div class="dash-section-head"><h2><i class="fa-solid fa-list-check"></i> My tasks</h2></div>
+                <div class="dash-tasks" id="dashTasks">
+                    <div class="dash-tasks-empty"><i class="fa-regular fa-circle-check"></i><span>Loading…</span></div>
+                </div>
+                <a href="/app/tasks" class="dash-tasks-all">View all tasks <i class="fa-solid fa-arrow-right"></i></a>
+            </aside>
+        </div>
+    </section>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+
 <style>
-    .welcome-shell {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: calc(100vh - 80px);
-        padding: 40px 20px;
-        background: radial-gradient(circle at top right, rgba(4, 74, 120, 0.05), transparent),
-                    radial-gradient(circle at bottom left, rgba(4, 74, 120, 0.03), transparent);
+    :root {
+        --dash-navy: #044a78;
+        --dash-navy-2: #0a6ebd;
+        --dash-ink: #0e1f30;
+        --dash-muted: #5a6b7b;
+        --dash-faint: #93a1b0;
+        --dash-line: #e7ecf2;
+        --dash-line-soft: #eef2f7;
+        --dash-surface: #ffffff;
+        --dash-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.05);
+        --dash-shadow-hover: 0 10px 24px -10px rgba(14, 31, 48, 0.18), 0 2px 6px rgba(14, 31, 48, 0.05);
+        --dash-radius: 14px;
     }
 
-    .welcome-card {
-        background: #ffffff;
-        padding: 60px;
-        border-radius: 12px;
-        box-shadow: 0 25px 50px -12px rgba(4, 74, 120, 0.15);
-        border: 1px solid rgba(4, 74, 120, 0.08);
-        max-width: 1000px;
-        width: 95%;
-        text-align: left;
-        position: relative;
-        margin-top: 40px;
-    }
-
-    .welcome-header {
-        display: flex;
-        align-items: center;
-        gap: 40px;
-        margin-bottom: 40px;
-    }
-
-    .profile-circle {
-        flex-shrink: 0;
-        width: 180px;
-        height: 180px;
-        background: #f0f7ff;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        box-shadow: 0 10px 20px rgba(4, 74, 120, 0.12);
-        border: 6px solid #ffffff;
-        transition: transform 0.3s ease;
-    }
-
-    .profile-circle:hover {
-        transform: scale(1.05);
-    }
-
-    .profile-circle img {
+    .dash {
         width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-
-    .welcome-text-group {
-        flex-grow: 1;
-    }
-
-    .welcome-title {
-        color: #03365a;
-        font-weight: 800;
-        font-size: 2.8rem;
-        margin-bottom: 8px;
-        line-height: 1.1;
-        letter-spacing: -0.5px;
-    }
-
-    .highlight-text {
-        background: linear-gradient(135deg, #044a78 0%, #0669a9 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-
-    .welcome-subtitle {
-        color: #64748b;
-        font-size: 1.15rem;
-        margin: 0;
-        line-height: 1.6;
-        max-width: 500px;
-    }
-
-    .info-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 16px;
-        margin-bottom: 40px;
-    }
-
-    .info-item {
-        background: #f8fafc;
-        padding: 22px;
-        border-radius: 10px;
-        border: 1px solid #f1f5f9;
-        transition: all 0.2s ease;
-        text-align: left;
-        min-height: 70px;
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: clamp(16px, 2vw, 30px) clamp(16px, 2.2vw, 32px) clamp(30px, 4vw, 56px);
         display: flex;
         flex-direction: column;
+        gap: clamp(18px, 2.4vw, 30px);
+        box-sizing: border-box;
+        color: var(--dash-ink);
+        overflow-x: clip;
+    }
+    .dash * { min-width: 0; }
+    .dash ::selection { background: rgba(10, 110, 189, 0.16); }
+
+    /* ---------- Hero ---------- */
+    .dash-hero {
+        position: relative;
+        background: linear-gradient(135deg, #ffffff 0%, #f5f9fd 100%);
+        border: 1px solid var(--dash-line);
+        border-radius: clamp(16px, 1.6vw, 20px);
+        box-shadow: var(--dash-shadow);
+        padding: clamp(12px, 1.3vw, 18px) clamp(22px, 2.8vw, 36px);
+        padding-left: clamp(26px, 3vw, 40px);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: clamp(16px, 2vw, 32px);
+        overflow: hidden;
+    }
+    /* A single restrained brand accent -- a thin vertical bar -- instead of a
+       saturated gradient block. */
+    .dash-hero::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 5px;
+        background: linear-gradient(180deg, var(--dash-navy-2), var(--dash-navy));
+    }
+    .dash-hero-main { flex: 1 1 320px; display: flex; align-items: center; gap: clamp(16px, 2vw, 24px); }
+    .dash-hero-text { min-width: 0; }
+    .dash-hero-side { flex: 0 1 auto; text-align: right; }
+
+    /* Round profile avatar: the person's photo, else a clean initial. */
+    .dash-avatar {
+        flex-shrink: 0;
+        width: clamp(92px, 9vw, 128px);
+        height: clamp(92px, 9vw, 128px);
+        border-radius: 50%;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
         justify-content: center;
+        background: linear-gradient(135deg, var(--dash-navy-2), var(--dash-navy));
+        color: #fff;
+        font-weight: 800;
+        font-size: clamp(2.53rem, 4vw, 3.45rem);
+        line-height: 1;
+        letter-spacing: 0.5px;
+        border: 3px solid #fff;
+        box-shadow: 0 8px 20px -8px rgba(4, 74, 120, 0.45), 0 0 0 1px var(--dash-line);
+        user-select: none;
     }
+    .dash-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
-    .info-item:hover {
-        background: #f1f5f9;
-        transform: translateY(-2px);
-    }
-
-    .info-label {
-        display: block;
-        font-size: 11px;
-        color: #94a3b8;
+    .dash-greeting {
+        margin: 0 0 6px;
+        font-size: 0.94rem;
+        font-weight: 700;
+        letter-spacing: 1.2px;
         text-transform: uppercase;
+        color: var(--dash-navy-2);
+    }
+    .dash-name {
+        margin: 0 0 12px;
+        font-size: clamp(1.84rem, 3.6vw, 2.7rem);
+        font-weight: 800;
+        line-height: 1.05;
+        letter-spacing: -0.6px;
+        color: var(--dash-ink);
+        overflow-wrap: anywhere;
+    }
+    .dash-quote {
+        margin: 0;
+        font-size: clamp(1.2rem, 1.6vw, 1.5rem);
+        font-style: italic;
+        font-weight: 500;
+        color: #475569;
+        line-height: 1.5;
+        letter-spacing: 0.1px;
+        padding-left: 15px;
+        border-left: 3px solid var(--dash-navy-2);
+        /* Always one line; a long quote trails off with an ellipsis rather
+           than wrapping and pushing the hero taller. */
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+    }
+    .dash-clock {
+        font-size: clamp(1.95rem, 3.2vw, 2.64rem);
+        font-weight: 800;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.5px;
+        color: var(--dash-navy);
+    }
+    .dash-date {
+        margin-top: 7px;
+        font-size: 1.03rem;
+        color: var(--dash-muted);
+        font-weight: 600;
+    }
+    .dash-role-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 14px;
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: rgba(4, 74, 120, 0.06);
+        border: 1px solid rgba(4, 74, 120, 0.18);
+        color: var(--dash-navy);
+        font-size: 0.86rem;
         font-weight: 800;
         letter-spacing: 0.8px;
-        margin-bottom: 6px;
     }
+    .dash-role-chip i { font-size: 0.9rem; opacity: 0.8; }
 
-    .info-value {
-        font-weight: 700;
-        color: #044a78;
-        font-size: 1.1rem;
+    /* ---------- Section scaffolding ---------- */
+    .dash-section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 15px;
     }
-
-    .quote-box {
-        padding: 35px;
-        background: linear-gradient(135deg, #f0f7ff 0%, #ffffff 100%);
-        border-radius: 24px;
-        border: 1px solid #e2e8f0;
-        position: relative;
-        text-align: center; /* center the quote text */
-        opacity: 0;
-        transform: translateY(15px);
-        transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-
-    .quote-icon {
-        position: absolute;
-        top: 15px;
-        left: 15px;
-        font-size: 32px;
-        color: #044a78;
-        opacity: 0.1;
-    }
-
-    .quote-text {
-        color: #03365a;
-        font-size: 1.4rem;
-        font-style: italic;
+    .dash-section-head h2 {
         margin: 0;
-        line-height: 1.5;
-        font-weight: 600;
-        letter-spacing: -0.2px;
+        font-size: clamp(1.15rem, 1.3vw, 1.32rem);
+        font-weight: 700;
+        letter-spacing: -0.1px;
+        color: var(--dash-ink);
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
+    .dash-section-head h2 i { color: var(--dash-navy); font-size: 1.15rem; }
+    .dash-refresh {
+        border: 1px solid var(--dash-line);
+        background: var(--dash-surface);
+        color: var(--dash-faint);
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.18s ease;
+    }
+    .dash-refresh:hover { color: var(--dash-navy); border-color: var(--dash-navy); background: #f5f9fd; }
+    .dash-refresh.is-spinning i { animation: dashSpin 0.8s linear infinite; }
+    @keyframes dashSpin { to { transform: rotate(360deg); } }
 
+    /* ---------- KPI tiles ---------- */
+    .dash-kpis {
+        display: grid;
+        /* Exactly 6 tiles per row on desktop; minmax(0,1fr) lets them shrink
+           without ever overflowing, and the breakpoints below step the count
+           down gracefully on narrower screens. */
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: clamp(11px, 1.1vw, 15px);
+    }
+    @media (max-width: 1240px) { .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (max-width: 820px)  { .dash-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 560px)  { .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .kpi-tile {
+        background: var(--dash-surface);
+        border: 1px solid var(--dash-line);
+        border-radius: var(--dash-radius);
+        box-shadow: var(--dash-shadow);
+        padding: clamp(16px, 1.6vw, 21px);
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        min-height: 94px;
+        text-decoration: none;
+        color: inherit;
+        transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+    a.kpi-tile:hover { transform: translateY(-2px); box-shadow: var(--dash-shadow-hover); border-color: #d7e0ea; }
+    .kpi-icon {
+        width: 46px;
+        height: 46px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        flex-shrink: 0;
+    }
+    .kpi-body { flex: 1; min-width: 0; }
+    .kpi-value { font-size: clamp(1.95rem, 2.3vw, 2.36rem); font-weight: 800; color: var(--dash-ink); line-height: 1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+    .kpi-label { font-size: 0.98rem; color: var(--dash-muted); font-weight: 600; margin-top: 8px; letter-spacing: 0; line-height: 1.3; }
+    .kpi-sub { font-size: 0.92rem; font-weight: 600; margin-top: 5px; }
+    .kpi-sub.warn { color: #d92d20; }
+    .kpi-sub.good { color: #067647; }
+    .kpi-sub.mute { color: var(--dash-faint); }
+
+    /* Category accents -- soft, consistent tints; colour aids scanning, never shouts. */
+    .acc-blue   .kpi-icon { background: #e9f1fb; color: #1366c4; }
+    .acc-indigo .kpi-icon { background: #ecebfb; color: #5a52c9; }
+    .acc-green  .kpi-icon { background: #e6f5ec; color: #0c9b55; }
+    .acc-teal   .kpi-icon { background: #e2f4f2; color: #0f766e; }
+    .acc-amber  .kpi-icon { background: #fbf0db; color: #b4690e; }
+    .acc-violet .kpi-icon { background: #f3e9fb; color: #8a3cc0; }
+    .acc-slate  .kpi-icon { background: #eef1f6; color: #51657a; }
+    .acc-red    .kpi-icon { background: #fde7e7; color: #d92d20; }
+
+    /* skeleton */
+    .kpi-tile.is-skeleton { pointer-events: none; box-shadow: none; }
+    .kpi-sk-icon { width: 46px; height: 46px; border-radius: 12px; background: #eef2f6; flex-shrink: 0; }
+    .kpi-sk-lines { display: flex; flex-direction: column; gap: 9px; flex: 1; }
+    .kpi-sk-lines span { height: 11px; border-radius: 6px; background: #eef2f6; }
+    .kpi-sk-lines span:first-child { width: 52%; height: 18px; }
+    .kpi-sk-lines span:last-child { width: 78%; }
+    .is-skeleton .kpi-sk-icon,
+    .is-skeleton .kpi-sk-lines span { animation: dashShimmer 1.3s ease-in-out infinite; }
+    @keyframes dashShimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+    /* ---------- Charts ---------- */
+    .dash-charts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+        gap: clamp(12px, 1.4vw, 16px);
+    }
+    .dash-card {
+        background: var(--dash-surface);
+        border: 1px solid var(--dash-line);
+        border-radius: 16px;
+        box-shadow: var(--dash-shadow);
+        padding: clamp(16px, 1.6vw, 22px);
+        min-width: 0;
+    }
+    .dash-card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; gap: 10px; }
+    .dash-card-head h3 { margin: 0; font-size: 1.24rem; font-weight: 700; color: var(--dash-ink); }
+    .dash-card-sub { font-size: 0.92rem; color: var(--dash-faint); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    .dash-canvas-wrap { position: relative; width: 100%; height: clamp(180px, 26vh, 250px); }
+    .dash-canvas-wrap canvas { max-width: 100%; }
+
+    /* ---------- Lower: shortcuts + tasks ---------- */
+    .dash-lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(280px, 26vw, 350px)); gap: clamp(16px, 2vw, 24px); align-items: stretch; }
+    .dash-lower-main { min-width: 0; }
+    .dash-shortcuts {
+        display: grid;
+        /* Exactly 6 per row on desktop, stepping down on narrower screens
+           (mirrors the At-a-glance tiles). */
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: clamp(10px, 1vw, 13px);
+    }
+    @media (max-width: 1240px) { .dash-shortcuts { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (max-width: 820px)  { .dash-shortcuts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 560px)  { .dash-shortcuts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .shortcut {
+        background: var(--dash-surface);
+        border: 1px solid var(--dash-line);
+        border-radius: var(--dash-radius);
+        box-shadow: var(--dash-shadow);
+        padding: 18px 12px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 11px;
+        text-decoration: none;
+        color: var(--dash-ink);
+        text-align: center;
+        transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+    .shortcut:hover { transform: translateY(-3px); box-shadow: var(--dash-shadow-hover); border-color: var(--dash-navy); }
+    /* Shortcuts read as one calm app-launcher: a single neutral chip that picks
+       up the brand on hover -- the per-category colour is reserved for the data
+       tiles above, so the two never compete. (Overrides the .acc-* rules; must
+       come after them.) */
+    .shortcut .shortcut-icon {
+        width: 46px;
+        height: 46px;
+        border-radius: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 21px;
+        background: #f1f5f9;
+        color: var(--dash-navy);
+        transition: background 0.16s ease, color 0.16s ease;
+    }
+    .shortcut:hover .shortcut-icon { background: #e8f1fb; color: var(--dash-navy-2); }
+    .shortcut-label { font-size: 1.09rem; font-weight: 600; line-height: 1.3; color: var(--dash-ink); }
+
+    /* ---------- Tasks widget ---------- */
+    .dash-lower-side {
+        background: var(--dash-surface);
+        border: 1px solid var(--dash-line);
+        border-radius: 16px;
+        box-shadow: var(--dash-shadow);
+        padding: clamp(16px, 1.6vw, 20px);
+        /* Fill the full height of the Quick-access column beside it. */
+        display: flex;
+        flex-direction: column;
+    }
+    .dash-lower-side .dash-section-head { margin-bottom: 12px; }
+    .dash-tasks { display: flex; flex-direction: column; gap: 7px; flex: 1 1 auto; }
+    .dash-task {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        padding: 11px 12px;
+        border-radius: 11px;
+        background: #f8fafc;
+        border: 1px solid var(--dash-line-soft);
+        text-decoration: none;
+        color: inherit;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .dash-task:hover { background: #f1f7fc; border-color: #d7e6f3; }
+    .dash-task-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; background: var(--dash-faint); }
+    .dash-task-dot.due { background: #f59e0b; }
+    .dash-task-dot.over { background: #d92d20; }
+    .dash-task-body { min-width: 0; flex: 1; }
+    .dash-task-title { font-size: 1.06rem; font-weight: 600; color: var(--dash-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dash-task-meta { font-size: 0.92rem; color: var(--dash-muted); margin-top: 3px; }
+    .dash-task-meta .over { color: #d92d20; font-weight: 700; }
+    .dash-task-meta .due { color: #b4690e; font-weight: 700; }
+    .dash-tasks-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 28px 10px; margin: auto; color: var(--dash-faint); font-size: 1.06rem; text-align: center; }
+    .dash-tasks-empty i { font-size: 32px; color: #cbd5e1; }
+    .dash-tasks-all { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; font-size: 1.01rem; font-weight: 700; color: var(--dash-navy); text-decoration: none; }
+    .dash-tasks-all:hover { gap: 9px; }
+    .dash-tasks-all i { transition: transform 0.15s ease; }
+
+    @media (max-width: 900px) {
+        .dash-lower { grid-template-columns: 1fr; }
+    }
     @media (max-width: 640px) {
-        .welcome-card {
-            padding: 40px 25px;
-            border-radius: 24px;
-        }
-        .welcome-header {
-            flex-direction: column;
-            text-align: center;
-            gap: 20px;
-        }
-        .welcome-title {
-            font-size: 2.2rem;
-        }
-        .info-grid {
-            grid-template-columns: 1fr;
-        }
+        /* Stacked, compact hero: without resetting the basis, flex:1 1 320px
+           becomes a 320px HEIGHT in a column and leaves a big empty gap. */
+        .dash-hero { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 18px; }
+        .dash-hero-main { flex: 0 0 auto; }
+        .dash-hero-side { flex: 0 0 auto; text-align: left; }
+    }
+    /* Very narrow (small phones, 300%+ zoom): keep everything single-ish column,
+       never a horizontal scroll. */
+    @media (max-width: 380px) {
+        .dash-kpis { grid-template-columns: 1fr; }
+        .dash-shortcuts { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .is-skeleton .kpi-sk-icon, .is-skeleton .kpi-sk-lines span,
+        .dash-refresh.is-spinning i { animation: none !important; }
+        .shortcut:hover, a.kpi-tile:hover { transform: none; }
     }
 </style>
 
 <script>
-    document.addEventListener('DOMContentLoaded', async () => {
-        const container = document.getElementById('quote-container');
-        const textEl = document.getElementById('quote-text');
+    document.addEventListener("DOMContentLoaded", () => {
+        const parseJson = (id, fb) => { try { return JSON.parse(document.getElementById(id).textContent); } catch { return fb; } };
+        const SHORTCUTS = parseJson("dash-shortcuts", []);
+        const USER = parseJson("dash-user", { name: "there" });
 
-        try {
-            const response = await fetch('/app/api/motivational?t=' + Date.now());
-            if (!response.ok) throw new Error('API Error');
-            const data = await response.json();
-            if (data && data.q) textEl.innerText = `"${data.q}"`;
-        } catch (error) {
-            textEl.innerText = '"Quality is not an act, it is a habit."';
-        } finally {
-            setTimeout(() => {
-                container.style.opacity = '1';
-                container.style.transform = 'translateY(0)';
-            }, 300);
+        const nf = (n) => Number(n || 0).toLocaleString("en-IN");
+
+        /* ---- Greeting + live clock ---- */
+        const greetEl = document.getElementById("dashGreeting");
+        const clockEl = document.getElementById("dashClock");
+        function tick() {
+            const now = new Date();
+            const h = now.getHours();
+            const part = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+            if (greetEl) greetEl.textContent = part + ",";
+            if (clockEl) clockEl.textContent = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
         }
+        tick();
+        setInterval(tick, 1000 * 30);
+
+        /* ---- Motivational quote ---- */
+        (async () => {
+            try {
+                const r = await fetch("/app/api/motivational?t=" + Date.now());
+                if (!r.ok) return;
+                const d = await r.json();
+                if (d && d.q) document.getElementById("dashQuote").textContent = '"' + d.q + '"';
+            } catch { /* keep the fallback already on the page */ }
+        })();
+
+        /* ---- Shortcuts ---- */
+        (function renderShortcuts() {
+            const wrap = document.getElementById("dashShortcuts");
+            if (!wrap) return;
+            if (!SHORTCUTS.length) { wrap.innerHTML = ""; return; }
+            wrap.innerHTML = "";
+            SHORTCUTS.forEach((s) => {
+                const a = document.createElement("a");
+                a.href = s.href;
+                a.className = "shortcut acc-" + (s.accent || "slate");
+                const ic = document.createElement("div");
+                ic.className = "shortcut-icon kpi-icon";
+                const i = document.createElement("i");
+                i.className = s.icon || "fa-solid fa-link";
+                ic.appendChild(i);
+                const lbl = document.createElement("span");
+                lbl.className = "shortcut-label";
+                lbl.textContent = s.label;
+                a.appendChild(ic);
+                a.appendChild(lbl);
+                wrap.appendChild(a);
+            });
+        })();
+
+        /* ---- KPI tiles ---- */
+        function tile({ icon, accent, value, label, sub, subClass, href }) {
+            const el = document.createElement(href ? "a" : "div");
+            el.className = "kpi-tile acc-" + (accent || "slate");
+            if (href) el.href = href;
+            const ic = document.createElement("div");
+            ic.className = "kpi-icon";
+            const i = document.createElement("i");
+            i.className = icon;
+            ic.appendChild(i);
+            const body = document.createElement("div");
+            body.className = "kpi-body";
+            const v = document.createElement("div");
+            v.className = "kpi-value";
+            v.textContent = value;
+            const l = document.createElement("div");
+            l.className = "kpi-label";
+            l.textContent = label;
+            body.appendChild(v);
+            body.appendChild(l);
+            if (sub) {
+                const s = document.createElement("div");
+                s.className = "kpi-sub " + (subClass || "mute");
+                s.textContent = sub;
+                body.appendChild(s);
+            }
+            el.appendChild(ic);
+            el.appendChild(body);
+            return el;
+        }
+
+        function renderKpis(k) {
+            const grid = document.getElementById("dashKpis");
+            if (!grid) return;
+            const tiles = [];
+            if (k.ordersInProduction != null)
+                tiles.push(tile({ icon: "fa-solid fa-gears", accent: "indigo", value: nf(k.ordersInProduction), label: "In production", href: "/app/labels/production/pending?tab=wip" }));
+            if (k.ordersAwaiting != null)
+                tiles.push(tile({ icon: "fa-solid fa-hourglass-half", accent: "blue", value: nf(k.ordersAwaiting), label: "Awaiting assignment", href: "/app/labels/production/deckle-set" }));
+            if (k.finishedRolls != null)
+                tiles.push(tile({ icon: "fa-solid fa-box", accent: "green", value: nf(k.finishedRolls), label: "Finished rolls in stock", sub: k.finishedMtrs != null ? nf(k.finishedMtrs) + " m" : null, href: "/app/finishedstock" }));
+            if (k.facestock)
+                tiles.push(tile({ icon: "fa-solid fa-layer-group", accent: "green", value: nf(k.facestock.units), label: "Facestock reels", sub: nf(k.facestock.kg) + " kg", href: "/app/facestockstock" }));
+            if (k.adhesive)
+                tiles.push(tile({ icon: "fa-solid fa-droplet", accent: "green", value: nf(k.adhesive.units), label: "Adhesive drums", sub: nf(k.adhesive.kg) + " kg", href: "/app/adhesivestock" }));
+            if (k.releaseLiner)
+                tiles.push(tile({ icon: "fa-solid fa-scroll", accent: "green", value: nf(k.releaseLiner.units), label: "Release liner reels", sub: nf(k.releaseLiner.kg) + " kg", href: "/app/releaselinerstock" }));
+            if (k.core)
+                tiles.push(tile({ icon: "fa-regular fa-circle", accent: "slate", value: nf(k.core.units), label: "Cores in stock", href: "/app/corestock" }));
+            if (k.skus != null)
+                tiles.push(tile({ icon: "fa-solid fa-boxes-stacked", accent: "teal", value: nf(k.skus), label: "SKUs", href: "/app/label-stock/view" }));
+            if (k.clients != null)
+                tiles.push(tile({ icon: "fa-solid fa-user-tie", accent: "teal", value: nf(k.clients), label: "Clients", href: "/app/client/view" }));
+            if (k.employees != null)
+                tiles.push(tile({ icon: "fa-solid fa-users", accent: "violet", value: nf(k.employees), label: "Employees", href: "/app/employee/view" }));
+            if (k.tasks)
+                tiles.push(tile({
+                    icon: "fa-solid fa-list-check", accent: "slate", value: nf(k.tasks.open), label: "My open tasks",
+                    sub: k.tasks.overdue ? k.tasks.overdue + " overdue" : (k.tasks.dueToday ? k.tasks.dueToday + " due today" : "all on track"),
+                    subClass: k.tasks.overdue ? "warn" : (k.tasks.dueToday ? "" : "good"),
+                    href: "/app/tasks",
+                }));
+            if (k.maintenanceOpen != null)
+                tiles.push(tile({ icon: "fa-solid fa-screwdriver-wrench", accent: k.maintenanceOpen ? "amber" : "slate", value: nf(k.maintenanceOpen), label: "Open maintenance", href: "/app/maintenance" }));
+
+            grid.innerHTML = "";
+            if (!tiles.length) {
+                grid.innerHTML = '<div class="dash-tasks-empty" style="grid-column:1/-1;"><i class="fa-regular fa-folder-open"></i><span>No summary available for your role.</span></div>';
+                return;
+            }
+            tiles.forEach((t) => grid.appendChild(t));
+        }
+
+        /* ---- Tasks list ---- */
+        function fmtDue(iso) {
+            if (!iso) return { text: "No due date", cls: "" };
+            const d = new Date(iso);
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const due = new Date(d); due.setHours(0, 0, 0, 0);
+            const days = Math.round((due - today) / 86400000);
+            const dateStr = d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+            if (days < 0) return { text: "Overdue · " + dateStr, cls: "over" };
+            if (days === 0) return { text: "Due today", cls: "due" };
+            if (days === 1) return { text: "Due tomorrow", cls: "due" };
+            return { text: "Due " + dateStr, cls: "" };
+        }
+        function renderTasks(rows) {
+            const wrap = document.getElementById("dashTasks");
+            if (!wrap) return;
+            if (!rows || !rows.length) {
+                wrap.innerHTML = '<div class="dash-tasks-empty"><i class="fa-regular fa-circle-check"></i><span>Nothing on your plate. Nice.</span></div>';
+                return;
+            }
+            wrap.innerHTML = "";
+            rows.forEach((t) => {
+                const due = fmtDue(t.dueDate);
+                const a = document.createElement("a");
+                a.href = "/app/tasks?open=" + encodeURIComponent(t.id);
+                a.className = "dash-task";
+                const dot = document.createElement("span");
+                dot.className = "dash-task-dot " + (due.cls === "over" ? "over" : due.cls === "due" ? "due" : "");
+                const body = document.createElement("div");
+                body.className = "dash-task-body";
+                const title = document.createElement("div");
+                title.className = "dash-task-title";
+                title.textContent = t.title;
+                const meta = document.createElement("div");
+                meta.className = "dash-task-meta";
+                const span = document.createElement("span");
+                if (due.cls) span.className = due.cls;
+                span.textContent = due.text;
+                meta.appendChild(span);
+                if (t.status === "IN_PROGRESS") {
+                    const ip = document.createElement("span");
+                    ip.textContent = " · In progress";
+                    meta.appendChild(ip);
+                }
+                body.appendChild(title);
+                body.appendChild(meta);
+                a.appendChild(dot);
+                a.appendChild(body);
+                wrap.appendChild(a);
+            });
+        }
+
+        /* ---- Charts (Chart.js, loaded deferred from cdnjs; degrade if absent) ---- */
+        const charts = {};
+        const CHART_GRID = "#eef2f6";
+        const CHART_TICK = "#94a3b8";
+        function baseOptions(valueLabel, extraTooltip) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 550, easing: "easeOutQuart" },
+                layout: { padding: { top: 6 } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: "#0e1f30",
+                        padding: 11,
+                        cornerRadius: 9,
+                        displayColors: false,
+                        titleColor: "#cbd5e1",
+                        titleFont: { weight: "600", size: 11 },
+                        bodyFont: { weight: "700", size: 13 },
+                        callbacks: extraTooltip || undefined,
+                    },
+                },
+                scales: {
+                    x: { grid: { display: false }, border: { display: false }, ticks: { color: CHART_TICK, font: { size: 14 }, maxRotation: 0, autoSkip: true, autoSkipPadding: 10 } },
+                    y: { beginAtZero: true, grid: { color: CHART_GRID, drawTicks: false }, border: { display: false }, ticks: { color: CHART_TICK, font: { size: 14 }, precision: 0, maxTicksLimit: 5, padding: 8 } },
+                },
+            };
+        }
+        function makeGradient(ctx, from, to) {
+            const g = ctx.createLinearGradient(0, 0, 0, 230);
+            g.addColorStop(0, from);
+            g.addColorStop(1, to);
+            return g;
+        }
+        function barDataset(ctx, data, from, to) {
+            return {
+                data,
+                backgroundColor: makeGradient(ctx, from, to),
+                hoverBackgroundColor: from,
+                borderRadius: 6,
+                borderSkipped: false,
+                maxBarThickness: 54,
+                categoryPercentage: 0.82,
+                barPercentage: 0.74,
+            };
+        }
+        function renderCharts(c) {
+            if (typeof window.Chart === "undefined") return;
+            const section = document.getElementById("dashChartsSection");
+            const hasOrders = c.ordersByWeek && c.ordersByWeek.length;
+            const hasProd = c.productionByDay && c.productionByDay.length;
+            if (!hasOrders && !hasProd) {
+                if (section) section.style.display = "none";
+                return;
+            }
+            // Make the section (and cards) visible BEFORE constructing the charts
+            // -- Chart.js sizes to the container's width at build time, so building
+            // inside a display:none ancestor renders them at zero width (bars
+            // crammed into a sliver). Show first, then build.
+            if (section) section.style.display = "";
+
+            if (hasOrders) {
+                const card = document.getElementById("cardOrders");
+                card.style.display = "";
+                const cv = document.getElementById("chartOrders");
+                const ctx = cv.getContext("2d");
+                if (charts.orders) charts.orders.destroy();
+                charts.orders = new window.Chart(cv, {
+                    type: "bar",
+                    data: { labels: c.ordersByWeek.map((d) => d.label), datasets: [barDataset(ctx, c.ordersByWeek.map((d) => d.value), "#2a8fd6", "#044a78")] },
+                    options: baseOptions(),
+                });
+            }
+
+            if (hasProd) {
+                const card = document.getElementById("cardProduction");
+                card.style.display = "";
+                const cv = document.getElementById("chartProduction");
+                const ctx = cv.getContext("2d");
+                if (charts.prod) charts.prod.destroy();
+                charts.prod = new window.Chart(cv, {
+                    type: "bar",
+                    data: { labels: c.productionByDay.map((d) => d.label), datasets: [barDataset(ctx, c.productionByDay.map((d) => d.rolls), "#2bc48a", "#0f766e")] },
+                    options: baseOptions(null, {
+                        label: (item) => {
+                            const row = c.productionByDay[item.dataIndex] || {};
+                            return "  " + nf(row.rolls) + " rolls · " + nf(row.mtrs) + " m";
+                        },
+                    }),
+                });
+            }
+
+            // One more resize on the next frame in case fonts/scrollbars shifted
+            // the container width between build and paint.
+            requestAnimationFrame(() => { if (charts.orders) charts.orders.resize(); if (charts.prod) charts.prod.resize(); });
+        }
+
+        /* ---- Load everything ---- */
+        let pendingCharts = null;
+        async function load() {
+            const btn = document.getElementById("dashRefresh");
+            if (btn) btn.classList.add("is-spinning");
+            try {
+                const r = await fetch("/app/api/dashboard/summary?t=" + Date.now());
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                const data = await r.json();
+                renderKpis(data.kpis || {});
+                renderTasks((data.lists && data.lists.tasks) || []);
+                pendingCharts = data.charts || {};
+                if (typeof window.Chart !== "undefined") renderCharts(pendingCharts);
+                // else: chart.umd.min.js (deferred) may still be loading -> see window load below
+            } catch (e) {
+                const grid = document.getElementById("dashKpis");
+                if (grid) grid.innerHTML = '<div class="dash-tasks-empty" style="grid-column:1/-1;"><i class="fa-solid fa-triangle-exclamation"></i><span>Could not load dashboard data. <a href="#" id="dashRetry">Retry</a></span></div>';
+                const retry = document.getElementById("dashRetry");
+                if (retry) retry.addEventListener("click", (ev) => { ev.preventDefault(); load(); });
+                document.getElementById("dashTasks").innerHTML = "";
+            } finally {
+                if (btn) setTimeout(() => btn.classList.remove("is-spinning"), 400);
+            }
+        }
+
+        // If Chart.js finishes loading after the data did, draw then.
+        window.addEventListener("load", () => {
+            if (pendingCharts && typeof window.Chart !== "undefined" && !charts.orders && !charts.prod) renderCharts(pendingCharts);
+        });
+
+        const refreshBtn = document.getElementById("dashRefresh");
+        if (refreshBtn) refreshBtn.addEventListener("click", load);
+        load();
     });
 </script>
