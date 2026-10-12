@@ -1,0 +1,247 @@
+<%#
+  New Coordinator dialog -- opened by the "+ Coordinator" button on
+  /vendor/coordinator/view (and by the "Add Coordinator" links on the vendor
+  pages, which land here as /vendor/coordinator/view?new=coordinator&vendorName=...;
+  old /form/vendor?tab=user links redirect the same way). A <form
+  class="so-dialog" data-so-form> inside a .so-dialog-backdrop, driven by
+  public/js/soFormDialog.js. Sister of the New User dialog (_userDialog.ejs);
+  a coordinator's locations carry pick up details instead of dispatch details,
+  hence public/js/vendorLocationRepeater.js.
+  Styles: /css/soDialog.css (link it from the page). Choices.js loads with
+  `defer`, so it is created on DOMContentLoaded.
+
+  Locals: `vendors` (string[] of vendor names), `csrfToken`.
+%>
+<%
+  const cvuVendors = (typeof vendors !== 'undefined' && Array.isArray(vendors)) ? vendors : [];
+  const cvuCsrf = typeof csrfToken !== 'undefined' ? csrfToken : '';
+%>
+<style>
+  #create-vendor-user-form {
+    height: 760px;
+  }
+  /* Pick up details: mode, location, payment side by side. */
+  .location-row .loc-fields--pickup > select,
+  .location-row .loc-fields--pickup > input {
+    flex: 1 1 150px;
+    min-width: 130px;
+  }
+</style>
+
+<div id="vendor-user-form-dialog" class="so-dialog-backdrop" aria-hidden="true">
+
+  <!-- ========================= NEW COORDINATOR ========================= -->
+  <form id="create-vendor-user-form" class="so-dialog so-dialog--xl" action="/app/form/vendor-user" method="post" autocomplete="off" novalidate data-so-form role="dialog" aria-modal="true" aria-labelledby="cvu-title">
+    <input type="hidden" name="_csrf" value="<%= cvuCsrf %>" />
+    <input type="hidden" name="objectId" id="cvu-object-id" />
+
+    <div class="so-dialog__head">
+      <span class="so-dialog__icon"><i class="fa-solid fa-user-tie"></i></span>
+      <div>
+        <h3 class="so-dialog__title" id="cvu-title">New Coordinator</h3>
+        <p class="so-dialog__desc">Pick a vendor first — its details fill in automatically.</p>
+      </div>
+    </div>
+
+    <div class="so-dialog__body">
+      <div class="so-dialog__section">Vendor Information</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="cvu-vendor-name">Vendor Name <span class="so-req">*</span></label>
+          <select name="vendorName" id="cvu-vendor-name" required data-so-autofocus>
+            <option value="" disabled selected hidden>Search</option>
+            <% cvuVendors.forEach((v) => { %>
+              <option value="<%= v %>"><%= v %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-vendor-id">Vendor Id</label>
+          <input id="cvu-vendor-id" name="vendorId" placeholder="Enter Vendor ID" readonly />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-vendor-status">Vendor Status</label>
+          <input type="text" id="cvu-vendor-status" name="vendorStatus" placeholder="Vendor Status" readonly />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-ho-location">H/O Location</label>
+          <input type="text" id="cvu-ho-location" name="hoLocation" placeholder="Enter H/O Location" readonly />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-warehouse-location">Warehouse Location</label>
+          <input type="text" id="cvu-warehouse-location" name="warehouseLocation" placeholder="Enter Warehouse Location" readonly />
+        </div>
+      </div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="cvu-vendor-gst">Vendor GST</label>
+          <input type="text" id="cvu-vendor-gst" name="vendorGst" placeholder="Vendor GST" readonly />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-vendor-msme">Vendor MSME</label>
+          <input type="text" id="cvu-vendor-msme" name="vendorMsme" placeholder="Vendor MSME" readonly />
+        </div>
+      </div>
+
+      <div class="so-dialog__section">Coordinator Information</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="cvu-user-name">Coordinator Name <span class="so-req">*</span></label>
+          <input type="text" id="cvu-user-name" name="userName" placeholder="Enter Coordinator Name" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-user-department">Department <span class="so-req">*</span></label>
+          <input type="text" id="cvu-user-department" name="userDepartment" placeholder="Enter Department" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-user-contact-no">Contact No <span class="so-req">*</span></label>
+          <input type="text" id="cvu-user-contact-no" name="userContact" placeholder="Enter Contact No" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="cvu-user-email">Email <span class="so-req">*</span></label>
+          <input type="email" id="cvu-user-email" name="userEmail" placeholder="Enter Email" required />
+        </div>
+      </div>
+
+      <div class="so-dialog__section so-dialog__section--row">
+        <span>Location Details</span>
+        <div class="loc-counter">
+          <button type="button" id="cvu-locations-minus" aria-label="Remove a location">&minus;</button>
+          <input type="text" id="cvu-locations-count" name="locationsCount" value="1" readonly />
+          <button type="button" id="cvu-locations-plus" aria-label="Add a location">+</button>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--so-faint); margin: -4px 0 10px;">
+        Each location has its own pick up details — pick up mode, pick up location and payment.
+      </div>
+      <div id="cvu-locations-details" class="locations-details"></div>
+    </div>
+
+    <div class="so-dialog__foot">
+      <label for="cvu-verified" style="display: flex; align-items: center; gap: 8px; margin: 0 auto 0 0; font-size: 13.5px; font-weight: 600; color: var(--so-ink); cursor: pointer;">
+        <input type="checkbox" id="cvu-verified" name="verified" value="on" style="width: 16px; height: 16px; accent-color: var(--so-brand);" />
+        Verified &mdash; data checked and approved
+      </label>
+      <button type="button" class="so-btn so-btn--ghost" onclick="soDialog.close('vendor-user-form-dialog')">Cancel</button>
+      <button type="submit" class="so-btn so-btn--primary"><i class="fa-solid fa-check"></i> Save Coordinator Details</button>
+    </div>
+  </form>
+</div>
+
+<script src="/js/locationRepeater.js?v=1"></script>
+<script src="/js/vendorLocationRepeater.js?v=1"></script>
+<script>
+  /* ============ NEW COORDINATOR: vendor cascade, location repeater =====
+     Runs on DOMContentLoaded: Choices.js is loaded with `defer`. */
+  document.addEventListener("DOMContentLoaded", function () {
+    const $ = (id) => document.getElementById(id);
+    const vendorNameSelect = $("cvu-vendor-name");
+    const form = $("create-vendor-user-form");
+    const detailFields = {
+      vendorId: $("cvu-vendor-id"),
+      vendorStatus: $("cvu-vendor-status"),
+      hoLocation: $("cvu-ho-location"),
+      warehouseLocation: $("cvu-warehouse-location"),
+      vendorGst: $("cvu-vendor-gst"),
+      vendorMsme: $("cvu-vendor-msme"),
+    };
+
+    let vendorNameChoices = null;
+    let isHandlingChange = false;
+
+    formatMobileInput($("cvu-user-contact-no"));
+
+    /* ===== LOCATION REPEATER (public/js/vendorLocationRepeater.js) ===== */
+    const repeater = createVendorLocationRepeater({
+      container: $("cvu-locations-details"),
+      countInput: $("cvu-locations-count"),
+      minus: $("cvu-locations-minus"),
+      plus: $("cvu-locations-plus"),
+    });
+
+    function clearVendorDetails() {
+      Object.values(detailFields).forEach((el) => { el.value = ""; });
+      $("cvu-object-id").value = "";
+    }
+
+    function handleVendorChange(vendorName) {
+      if (!vendorName) { clearVendorDetails(); return; }
+      fetch(`/app/form/vendor/${encodeURIComponent(vendorName)}`)
+        .then((response) => response.json())
+        .then((data) => {
+          detailFields.vendorId.value = data.vendorId || "";
+          detailFields.vendorStatus.value = data.vendorStatus || "";
+          detailFields.hoLocation.value = data.hoLocation || "";
+          detailFields.warehouseLocation.value = data.warehouseLocation || data.hoLocation || "";
+          detailFields.vendorGst.value = data.vendorGst || "";
+          detailFields.vendorMsme.value = data.vendorMsme || "";
+          $("cvu-object-id").value = data._id || "";
+
+          // Start the first location at the vendor's head office.
+          const ho = String(data.hoLocation || "").toUpperCase();
+          const loc = form.querySelector('input[name="locationDetails[0][userLocation]"]');
+          const addr = form.querySelector('input[name="locationDetails[0][dispatchAddress]"]');
+          if (loc && !loc.value) loc.value = ho;
+          if (addr && !addr.value) addr.value = ho;
+        })
+        .catch((error) => console.error("Error:", error));
+    }
+
+    try {
+      vendorNameChoices = new Choices(vendorNameSelect, {
+        searchEnabled: true,
+        itemSelectText: "",
+        shouldSort: false,
+        callbackOnInit: function () {
+          this.passedElement.element.addEventListener("change", (e) => {
+            if (isHandlingChange) return;
+            isHandlingChange = true;
+            setTimeout(() => { isHandlingChange = false; }, 100);
+            handleVendorChange(e.target.value);
+          });
+        },
+      });
+    } catch (e) {
+      console.error("Choices initialization failed:", e);
+      vendorNameSelect.addEventListener("change", (e) => handleVendorChange(e.target.value));
+    }
+
+    // A native form.reset() clears every location-row input but can't know it
+    // should also collapse the repeater back to one empty row, or that the
+    // Vendor Name Choices widget needs telling separately (Choices doesn't
+    // observe the underlying <select> being reset externally). The "reset"
+    // event fires *before* the controls are reset, so rebuild the rows after
+    // it (rebuilding inside the handler would keep what was typed as the new
+    // default).
+    form.addEventListener("reset", () => {
+      vendorNameChoices?.removeActiveItems();
+      setTimeout(() => repeater.setRows([]), 0);
+    });
+
+    /* ================= DIALOG ENTRY POINT =================
+       Called by the "+ Coordinator" button, and by "Add Coordinator" links on
+       the vendor pages (they land here as
+       /vendor/coordinator/view?new=coordinator&vendorName=...). */
+    window.openVendorUserDialog = function (vendorName) {
+      form.reset();
+      soDialog.open("vendor-user-form-dialog");
+
+      if (vendorName) {
+        if (vendorNameChoices) vendorNameChoices.setChoiceByValue(vendorName);
+        else vendorNameSelect.value = vendorName;
+        handleVendorChange(vendorName);
+        setTimeout(() => $("cvu-user-name")?.focus(), 30);
+      }
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("new") === "coordinator") {
+      window.openVendorUserDialog(params.get("vendorName") || "");
+      params.delete("new");
+      params.delete("vendorName");
+      const qs = params.toString();
+      history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+    }
+  });
+</script>
+<script src="/js/soFormDialog.js?v=1"></script>

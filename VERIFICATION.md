@@ -8,7 +8,7 @@ New Client dialog footer, Edit Client page) and **User** (`/master/view` table, 
 footer, Edit User page).
 Also every form in the side-nav **Masters** tab: Company, Location, Machine, Facestock, Adhesive, Release, Family, Type,
 Core, Board Paper and LS Adhesive (binding) — badge on the name/SKU column of each table, a "Verified" tick in each
-add/edit dialog footer (Company: beside Cancel/Update), and a "Verified" row in the view popups. Use the steps below to add it to anything else (Vendor, Machine, Masters, ...).
+add/edit dialog footer (Company: beside Cancel/Update), and a "Verified" row in the view popups. Also **Vendor** and **Vendor Coordinator** (`/app/vendor/view` + `/app/vendor/coordinator/view` tables, profile/details headers, New/Edit Vendor and New/Edit Coordinator dialogs). Also **Label Stock Binding** (client + product + size + RM → rate; `/label-stock-binding/view/:id` table + view popup, New/Edit binding form checkbox) and **Employee** (`/employee/view` table, profile header, Add Employee dialog footer, Edit Employee page; the routes strip `verified*` from the posted body so approval can only come from the session). Use the steps below to add it to anything else.
 
 ## The pieces (all shared — don't copy them)
 

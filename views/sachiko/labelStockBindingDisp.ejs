@@ -20,6 +20,7 @@
   <div id="master-table" class="tabulator tabulator-modern"></div>
 </div>
 
+<script src="/js/verification.js"></script>
 <!-- Tabulator JS -->
 <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
 
@@ -71,6 +72,9 @@
       paperSize: binding.paperSize || "",
       runningMeters: binding.runningMeters ?? "",
       status: binding.status || "ACTIVE",
+      verified: !!binding.verified,
+      verifiedBy: binding.verifiedBy || "",
+      verifiedAt: binding.verifiedAt || null,
       // Total units actually sent to this client against this binding --
       // summed server-side from every non-cancelled Sales Order's
       // dispatchedQuantity (routes/sachiko/labelStockBinding.js).
@@ -177,7 +181,7 @@
       },
       withTextFilter({ title: "Client Name", field: "clientName", minWidth: 180 }),
       withTextFilter({ title: "User Name", field: "userName", minWidth: 150 }),
-      withTextFilter({ title: "Product Code", field: "productCode", minWidth: 150, formatter: (cell) => `<span style="font-weight:700;color:#044a78;">${cell.getValue()}</span>` }),
+      withTextFilter({ title: "Product Code", field: "productCode", minWidth: 150, formatter: (cell) => `<span style="display:inline-flex;align-items:center;gap:5px;font-weight:700;color:#044a78;">${esc(cell.getValue())}${verifiedBadgeFor(cell.getRow().getData(), 16)}</span>` }),
       withTextFilter({ title: "Size", field: "paperSize", minWidth: 110 }),
       withTextFilter({ title: "Running Mtrs", field: "runningMeters", minWidth: 130 }),
       { title: "Sent", field: "sentQuantity", hozAlign: "right", headerHozAlign: "right", minWidth: 100,
@@ -206,7 +210,7 @@
     document.getElementById("label-stock-view-body").innerHTML = `
       <div style="background:linear-gradient(135deg,#044a78 0%,#03365a 100%);padding:22px 24px 20px;color:#fff;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
         <div>
-          <h2 style="margin:0;font-size:20px;font-weight:700;">${esc(row.productCode)}</h2>
+          <h2 style="margin:0;font-size:20px;font-weight:700;display:inline-flex;align-items:center;gap:8px;">${esc(row.productCode)}${verifiedBadgeFor(row, 22)}</h2>
           <p style="margin:6px 0 0;font-size:13px;opacity:0.85;">${esc(row.clientName)} / ${esc(row.userName)}</p>
         </div>
         <button onclick="document.getElementById('label-stock-view-modal').style.display='none'"
@@ -226,7 +230,7 @@
           { label: "Lowest Rate", value: fmtRate(row.lowestRate) },
           { label: "Highest Rate", value: fmtRate(row.highestRate) },
           { label: "Status", value: row.status },
-        ].map(r => `
+        ].concat(row.verified ? [{ label: "Verified", value: verifiedText(row) }] : []).map(r => `
           <div style="display:flex;justify-content:space-between;border-bottom:1px solid #f1f5f9;padding-bottom:10px;">
             <span style="font-size:13px;color:#64748b;font-weight:600;">${r.label}</span>
             <span style="font-size:13px;color:#03365a;font-weight:700;">${esc(r.value)}</span>

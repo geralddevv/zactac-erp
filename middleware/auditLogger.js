@@ -28,6 +28,11 @@ import AuditLog from "../models/system/auditLog.js";
 const AUDITED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const SKIP_PATHS = new Set(["/app/login", "/logout"]);
 
+// Marking a notification read is a UI gesture, not an action on company data
+// -- every bell click would otherwise file an audit entry. The notification
+// itself records what happened; who glanced at it is not worth keeping.
+const SKIP_PREFIXES = ["/app/notifications/"];
+
 const ACTION_BY_METHOD = {
   POST: "CREATE",
   PUT: "UPDATE",
@@ -85,6 +90,7 @@ export function auditLogger(req, res, next) {
       if (!authUser) return;
       if (!AUDITED_METHODS.has(req.method)) return;
       if (SKIP_PATHS.has(req.path)) return;
+      if (SKIP_PREFIXES.some((prefix) => req.path.startsWith(prefix))) return;
 
       const action = ACTION_BY_METHOD[req.method] || req.method;
       const path = normalizePath(req.originalUrl?.split("?")[0] || req.path);

@@ -330,7 +330,7 @@
           ${dash(job.lotNo) ? `<span title="Lot No">${escapeHtml(job.lotNo)}</span>` : ""}
           ${dash(job.paperSize) ? `<span title="Paper size"><b>${escapeHtml(job.paperSize)}</b></span>` : ""}
           ${job.layoutSummary ? `<span class="mq-sg-layout" title="Cut layout">${escapeHtml(niceLayout(job.layoutSummary))}</span>` : ""}
-          <span class="mq-sg-count" title="${leftN} of ${total} to run"><b>${leftN}</b>${total ? ` / ${total}` : ""}</span>
+          <span class="mq-sg-count" title="${produced} of ${total} made, ${leftN} to run"><b>${produced}</b>${total ? ` / ${total}` : ""}</span>
           ${Number(job.quantity) > 0 ? `<span title="Ordered quantity">${Number(job.quantity).toLocaleString("en-IN")} qty</span>` : ""}
           <span class="mq-sg-client" title="${escapeHtml(job.clientName || "")}">${escapeHtml(dash(job.clientName) || "—")}</span>
           ${rollIds.length ? `<span title="${escapeHtml(rollIds.join(", "))}">${rollIds.length} roll${rollIds.length === 1 ? "" : "s"} allotted</span>` : ""}

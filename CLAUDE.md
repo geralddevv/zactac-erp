@@ -15,6 +15,7 @@ Utility scripts (run directly). Signature/backfill ones are dry-run by default �
 node scripts/backfill-prodbinding-signatures.js
 node scripts/backfill-prodbinding-calc.js
 node scripts/backfill-employee-nickname.js       # empNickName = first word of empName
+node scripts/backfill-task-assignee.js           # Task assignedToName / createdById / createdByName (+ completedAt) from the ids already on the row
 node scripts/backfill-facestock-signatures.js    # repair Facestock Master dup protection (also drops old vendor+SKU index)
 node scripts/backfill-adhesive-signatures.js     # same, Adhesive Master
 node scripts/backfill-release-signatures.js      # repair Release Master dup protection
@@ -47,6 +48,7 @@ Requires a `.env` file with at minimum:
 - `MONGO_URI` (or equivalent — see `config/db.js`)
 - `TASKS_MONGO_URI` (optional) — `/fairtech/tasks` stores data in a separate isolated DB (`config/tasksDb.js`). Defaults to sibling database `<main db>_tasks` on the same server.
 - `DECKLE_AUTO_ENABLED` (optional) — kill switch for the Auto Deckle optimizer. On unless `false`/`0`/`off`/`no`; off (restart needed) removes the Auto Set panel and client code, API returns 503.
+- `TASK_REMINDERS_ENABLED` (optional) — kill switch for the due-soon/overdue task reminder job (`utils/taskReminders.js`, every 15 min). Same on-unless-`false`/`0`/`off`/`no` form; restart to change.
 - Dev only: `PROPRIETOR_USER/PASS`, `ADMIN_USER/PASS`, `HR_USER/PASS`, `HOD_USER/PASS`, `SALES_USER/PASS` (backdoor accounts; blocked in production)
 
 ## Architecture
@@ -118,6 +120,20 @@ router.post("/x", requireAuth, createLimiter, upload, async (req, res) => {
 ```
 
 Serve with `sendAsset(res, asset, { thumb })` after your own auth check (honours Range, so video seeks). Route by document id + array index (see `routes/system/maintenance.js`), never filename. CSP allows `media-src 'self' blob:` (blob to preview a clip before upload); image previews must use `data:` URLs (`img-src` disallows blob).
+
+### Notifications (header bell) and task assignment
+
+`utils/notify.js` is the one way anything creates a notification; the bell is `public/js/notifications.js` over `routes/system/notifications.js`. **Full how-to, traps and the FAIRTECH port: `NOTIFICATIONS.md`.** The essentials:
+
+- **A notification is addressed to an `Employee._id` in the main DB.** Get it with `sessionEmployeeId(req)` (`utils/sessionUser.js`) — `authUser.empObjId`, else resolved from `empId` once and cached back onto the session, else `null` for the dev backdoor logins (no employee record → no inbox, nothing assignable). Both logins stamp `empObjId`; never match a person on `profileCode`.
+- **Links are stored on the internal `/app` prefix** (`/app/tasks?open=<id>`), stamped with the live company slug by `middleware/brandPrefix.js` on the way out — JSON bodies included. Never write the slug in.
+- `notify({ userIds, actorId, type, title, link, dedupeKey, … })` drops the actor (nobody hears about their own action), refuses a link that isn't an in-app path, and never throws — so **call it after the write succeeds**. Repeating producers pass a `dedupeKey`; its unique index is **partial, not sparse** (a compound sparse index would reject every person's second notification — see `NOTIFICATIONS.md` §1).
+- Notification text is user-typed: the panel builds rows with `textContent`, never `innerHTML`. Row reads/polls are kept out of the audit log (`SKIP_PREFIXES` in `middleware/auditLogger.js`).
+- The router is mounted **ahead of every role-gated router** (like `machineRoutes`), since the bell is in the layout of every page.
+
+**A new task is either sent or kept.** The New Task dialog asks "Who is this for?" first, because it decides what the rest of the form means: **Send to employee** (default) assigns it to the picked employee and rings their bell; **Keep for myself** makes it the creator's own task — the Assigned Employee field is hidden, `assignedTo` is the creator, and nobody is notified (due reminders then ring the creator's own bell, which is the point of a reminder). `assignMode` is re-decided server-side in `POST /tasks`: in `self` mode a posted `assignedTo` is **ignored outright**, so a doctored request can't put a silent task on someone else. No flag on the document — a kept reminder is simply a task you assigned to yourself, so no query, scope or notification rule needs a special case. The button is disabled for logins with no employee record (nothing for the task to belong to).
+
+**Tasks** (`/<slug>/tasks`, isolated DB) are the first producer, and are now delegated work rather than a private to-do list. `Task.assignedTo` **is** the assignee id — the same `Employee._id` a session reduces to — with `assignedToName` as a copy beside it (no cross-database join to lean on); `createdBy` stays the creator's `empId` code (the Daybook keys on it) alongside `createdById`/`createdByName`. The page has three server-enforced scopes — **Assigned to me** (default) / **Created by me** / **All** (proprietor, admin, hod only) — plus `GET /tasks/mine` (JSON: open / overdue / done). Who may change what: the creator (or an all-scope role) everything including delete; the **assignee status only**; anyone else gets "not found", so an id gives nothing away. The Daybook draws on both (created by me **or** assigned to me). Assignment only works end to end for the roles `fairdeskRoute` is mounted for — see the note in `NOTIFICATIONS.md` §6.
 
 ### Front-end conventions
 

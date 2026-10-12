@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
+import { verificationFields } from "../../utils/verification.js";
 
 /* ================= DEPENDENTS ================= */
 const dependentSchema = new mongoose.Schema(
@@ -109,6 +110,7 @@ const employeeSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     empInactiveReason: { type: String, default: "" },
     empAssetsSurrendered: [{ type: String }],
+    ...verificationFields,
   },
   {
     timestamps: true,

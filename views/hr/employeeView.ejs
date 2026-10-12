@@ -198,7 +198,7 @@
           alt="<%= employee.empName %>"
         />
         <div style="flex: 1;">
-          <h1><%= employee.empName %></h1>
+          <h1 style="display:inline-flex;align-items:center;gap:8px;"><%= employee.empName %><span id="empVerifiedBadge"></span></h1>
           <div class="chips" style="margin-top: 6px;">
           <span class="status-badge <%= isInactive ? 'status-inactive' : 'status-active' %>"><%= isInactive ? 'Inactive' : 'Active' %></span>
           <% if (employee.empDateOfJoining) { %><span class="chip"><i class="fa-solid fa-calendar-check"></i> Joined <%= formatDateIN(employee.empDateOfJoining) %></span><% } %>
@@ -382,6 +382,14 @@
   </div>
 </section>
 
+<script src="/js/verification.js"></script>
+<script>
+  (function () {
+    const emp = <%- safeJson({ verified: !!employee.verified, verifiedBy: employee.verifiedBy || "", verifiedAt: employee.verifiedAt || null }) %>;
+    const slot = document.getElementById("empVerifiedBadge");
+    if (slot) slot.innerHTML = verifiedBadgeFor(emp, 24);
+  })();
+</script>
 <script>
 document.addEventListener("DOMContentLoaded", () => {
   const modal = document.getElementById("imageModal");

@@ -17,15 +17,14 @@ import coreMasterRoutes from "./routes/system/coreMaster.js";
 import boardPaperMasterRoutes from "./routes/system/boardPaperMaster.js";
 import adhesiveMasterRoutes from "./routes/system/adhesiveMaster.js";
 import releaseMasterRoutes from "./routes/system/releaseMaster.js";
+import notificationRoutes from "./routes/system/notifications.js";
 import payrollRoute from "./routes/acccounting/payroll.js";
 import loanRoute from "./routes/acccounting/loan.js";
 import advanceRoute from "./routes/acccounting/advance.js";
 import employeeRoute from "./routes/hr/employee.js";
 import pettycashRoute from "./routes/acccounting/pettycash.js";
-import tapeBindingRoutes from "./routes/inventory/tapeBinding.js";
 import labelStockBindingRoutes from "./routes/sachiko/labelStockBinding.js";
 import labelStockAdhesiveBindingRoutes from "./routes/sachiko/labelStockAdhesiveBinding.js";
-import tapeStockRoutes from "./routes/stock/tapeStock.js";
 import stockViewRoutes from "./routes/stock/stockView.js";
 import facestockStockRoutes from "./routes/stock/facestockStock.js";
 import wipStockRoutes from "./routes/stock/wipStock.js";
@@ -36,7 +35,6 @@ import semiFinishedStockRoutes from "./routes/stock/semiFinishedStock.js";
 import finishedStockRoutes from "./routes/stock/finishedStock.js";
 import labelStockProductionRoutes from "./routes/sachiko/labelStockProduction.js";
 import clientFormRoute from "./routes/users/clients.js";
-import vendorItemBindingRoutes from "./routes/inventory/vendorItemBinding.js";
 import reorderRoutes from "./routes/inventory/reorder.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
 import { auditLogger, logAuthEvent } from "./middleware/auditLogger.js";
@@ -66,6 +64,7 @@ import { brandPrefix } from "./middleware/brandPrefix.js";
 import { sendAsset, assetExists, assetPath } from "./utils/media.js";
 import { offlinePageHtml } from "./utils/offlinePage.js";
 import { loginLimiter, createLimiter, updateLimiter, deleteLimiter } from "./utils/limiters.js";
+import { startTaskReminderJob } from "./utils/taskReminders.js";
 
 const app = express();
 if (!process.env.PORT) {
@@ -897,6 +896,13 @@ app.post("/app/login", loginLimiter, async (req, res) => {
         role: employee.role || "employee",
         permissions: employee.permissions,
         empId: employee.empId,
+        // The employee document _id. This is the id anything "about me"
+        // matches on -- tasks assigned to me, notifications addressed to me --
+        // so it has to be in the session, not just the empId code. The
+        // operator login carries the same field (utils/operatorAuth.js);
+        // sessions that predate it are resolved from empId on first use by
+        // utils/sessionUser.js, so nobody has to log in again.
+        empObjId: String(employee._id),
         empPhoto: employee.empPhoto,
       });
     }
@@ -1067,6 +1073,12 @@ app.use(
   clientFormRoute,
 );
 
+// The header bell's own API. Bare-mounted with no role gate and ahead of
+// everything else for the same reason as machineRoutes below: the bell sits in
+// the layout of every page, so every role -- operators included -- must be
+// able to read its own count without a role check turning the request away.
+app.use("/app", requireAuth, notificationRoutes);
+
 // Mounted ahead of the other /sachiko routers, with no requireRole, so
 // operators reach their machine queue before fairdeskRoute's requireRole
 // turns them away. Because a path-prefixed app.use runs its middleware for
@@ -1096,9 +1108,6 @@ app.use("/app", requireAuth, adhesiveMasterRoutes);
 app.use("/app", requireAuth, releaseMasterRoutes);
 
 app.use("/app", requireAuth, requireRole(["proprietor", "admin", "hod", "sales", "hr"]), fairdeskRoute);
-app.use("/app", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), tapeBindingRoutes);
-app.use("/app", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), vendorItemBindingRoutes);
-app.use("/app/tapestock", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), tapeStockRoutes);
 app.use("/app/stocks", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), stockViewRoutes);
 app.use("/app/facestockstock", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), facestockStockRoutes);
 app.use("/app/stock/wip", requireAuth, requireRole(["proprietor", "admin", "hod", "sales"]), wipStockRoutes);
@@ -1147,4 +1156,7 @@ const ip =
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`Server running on http://${ip}:${port}`);
+  // Due-soon / overdue task reminders for the header bell. Idempotent by the
+  // day (utils/taskReminders.js), so a restart mid-day re-sends nothing.
+  startTaskReminderJob();
 });

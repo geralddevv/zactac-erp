@@ -4,8 +4,6 @@ import express, { json } from "express";
 import crypto from "crypto";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
-import sharp from "sharp";
 import mongoose from "mongoose";
 // import asyncHandler from "express-async-handler";
 import Client from "../models/users/client.js";
@@ -22,8 +20,6 @@ import TapeSalesOrder from "../models/inventory/TapeSalesOrder.js";
 import PurchaseOrder from "../models/inventory/PurchaseOrder.js";
 import SystemId from "../models/system/systemId.js";
 import Calculator from "../models/utilities/calculator.js";
-import Block from "../models/utilities/block_model.js";
-import Die from "../models/utilities/die_model.js";
 import Task from "../models/miscellaneous/task_model.js";
 import DaybookEntry from "../models/miscellaneous/daybook_model.js";
 import Machine from "../models/system/machine.js";
@@ -34,6 +30,7 @@ import PurchaseOrderLog from "../models/inventory/PurchaseOrderLog.js";
 import VendorTapeBinding from "../models/inventory/vendorTapeBinding.js";
 import Location from "../models/system/location.js";
 import Counter from "../models/system/counter.js";
+import { generateVendorId, getNextVendorIdPreview } from "../utils/vendorId.js";
 import AuditLog from "../models/system/auditLog.js";
 import Sample from "../models/inventory/sample.js";
 import PendingProduction from "../models/inventory/pendingProduction.js";
@@ -71,6 +68,8 @@ import {
 } from "../utils/deckleOptimizer/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createLimiter, updateLimiter, deleteLimiter } from "../utils/limiters.js";
+import { notify } from "../utils/notify.js";
+import { sessionEmployeeId, sessionDisplayName } from "../utils/sessionUser.js";
 import { notifyOperatorQueue } from "../utils/operatorEvents.js";
 import { computeRawMaterialNeed } from "../utils/rawMaterialNeed.js";
 import { deckleTotalRunningMetres, deckleRunningMetersText } from "../utils/deckleTotals.js";
@@ -113,245 +112,6 @@ function canonicalizeLocationName(value) {
 
 function toNumber(value) {
   return Number(value || 0);
-}
-
-function getProfileStockConfig(itemType) {
-  const map = {
-    Tape: {
-      itemLabel: "Tape",
-      stockModel: TapeStock,
-      logModel: TapeStockLog,
-      itemField: "tape",
-      onModel: "Tape",
-    },
-  };
-  return map[itemType] || null;
-}
-
-async function getItemStockSummary(itemType, itemId, excludeOrderId = null) {
-  const config = getProfileStockConfig(itemType);
-  if (!config) throw new Error(`Unsupported stock item type: ${itemType}`);
-  const itemObjectId = new mongoose.Types.ObjectId(itemId);
-
-  const bookedMatch = {
-    tapeId: itemObjectId,
-    onModel: config.onModel,
-    status: { $in: ["PENDING", "CONFIRMED"] },
-  };
-  if (excludeOrderId) {
-    bookedMatch._id = { $ne: new mongoose.Types.ObjectId(excludeOrderId) };
-  }
-
-  const [stockAggregation, bookedAggregation] = await Promise.all([
-    config.stockModel.aggregate([
-      { $match: { [config.itemField]: itemObjectId } },
-      {
-        $group: {
-          _id: {
-            location: { $toUpper: { $ifNull: ["$location", "UNKNOWN"] } },
-          },
-          qty: { $sum: "$quantity" },
-        },
-      },
-      { $sort: { "_id.location": 1 } },
-    ]),
-    TapeSalesOrder.aggregate([
-      { $match: bookedMatch },
-      {
-        $group: {
-          _id: {
-            location: { $toUpper: { $ifNull: ["$sourceLocation", "UNKNOWN"] } },
-          },
-          bookedQty: {
-            $sum: { $max: [0, { $subtract: ["$quantity", { $ifNull: ["$dispatchedQuantity", 0] }] }] },
-          },
-        },
-      },
-    ]),
-  ]);
-
-  const stockMap = new Map(
-    stockAggregation.map((row) => [canonicalizeLocationName(row._id?.location), toNumber(row.qty)]),
-  );
-  const bookedMap = new Map(
-    bookedAggregation.map((row) => [canonicalizeLocationName(row._id?.location), toNumber(row.bookedQty)]),
-  );
-
-  const locations = Array.from(new Set([...stockMap.keys(), ...bookedMap.keys()]))
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b))
-    .map((location) => {
-      const qty = toNumber(stockMap.get(location));
-      const booked = toNumber(bookedMap.get(location));
-      return {
-        location,
-        qty,
-        booked,
-        balance: qty - booked,
-      };
-    })
-    .filter((entry) => entry.qty !== 0 || entry.booked !== 0);
-
-  const totalStock = locations.reduce((sum, entry) => sum + toNumber(entry.qty), 0);
-  const totalBooked = locations.reduce((sum, entry) => sum + toNumber(entry.booked), 0);
-  const totalBalance = totalStock - totalBooked;
-
-  return {
-    locations,
-    totalStock,
-    totalBooked,
-    totalBalance,
-    booked: totalBooked, // for compatibility
-    balance: totalBalance, // for compatibility
-  };
-}
-
-async function applyItemStockDelta({ itemType, itemId, location, delta, remarks, createdBy, extraFields = {} }) {
-  const config = getProfileStockConfig(itemType);
-  if (!config) throw new Error(`Unsupported stock item type: ${itemType}`);
-  const normalizedLocation = canonicalizeLocationName(location) || "UNKNOWN";
-  const itemObjectId = new mongoose.Types.ObjectId(itemId);
-
-  const matchQuery = { [config.itemField]: itemObjectId, location: normalizedLocation };
-  if (extraFields.tapeFinish) {
-    matchQuery.tapeFinish = extraFields.tapeFinish;
-  }
-
-  const [balanceRow] = await config.stockModel.aggregate([
-    { $match: matchQuery },
-    { $group: { _id: null, qty: { $sum: "$quantity" } } },
-  ]);
-  const openingStock = toNumber(balanceRow?.qty);
-  const closingStock = openingStock + delta;
-
-  if (delta === 0) {
-    return { openingStock, closingStock, changed: false };
-  }
-
-  await config.stockModel.create({
-    [config.itemField]: itemObjectId,
-    location: normalizedLocation,
-    quantity: delta,
-    remarks,
-    ...extraFields,
-  });
-
-  await config.logModel.create({
-    [config.itemField]: itemObjectId,
-    location: normalizedLocation,
-    openingStock,
-    quantity: Math.abs(delta),
-    closingStock,
-    type: delta > 0 ? "INWARD" : "OUTWARD",
-    source: "MANUAL",
-    remarks,
-    createdBy: createdBy || "SYSTEM",
-    ...extraFields,
-  });
-
-  return { openingStock, closingStock, changed: true };
-}
-
-// Keys must match the exact itemType strings passed at each handleProfileStockEdit call site.
-const STOCK_EDIT_PRODUCT_ID_FIELD = {
-  Tape: "tapeProductId",
-};
-
-async function handleProfileStockEdit(req, res, { itemType, model, redirectPath }) {
-  try {
-    const productIdField = STOCK_EDIT_PRODUCT_ID_FIELD[itemType];
-    const selectFields = ["_id", productIdField];
-    if (itemType === "Tape") selectFields.push("tapeFinish");
-    const item = await model.findById(req.params.id).select(selectFields.join(" ")).lean();
-    if (!item) {
-      req.flash("notification", `${itemType} not found`);
-      return res.redirect(redirectPath);
-    }
-    const itemLabel = item[productIdField] || String(item._id);
-
-    const fromLocation = canonicalizeLocationName(req.body.fromLocation) || "UNKNOWN";
-    const toLocation = canonicalizeLocationName(req.body.toLocation) || "UNKNOWN";
-    const requestedQuantity = Number(req.body.quantity);
-    const itemProfileUrl = `${redirectPath}/${item._id}`;
-
-    if (!Number.isFinite(requestedQuantity) || requestedQuantity < 0) {
-      req.flash("notification", "Enter a valid stock quantity");
-      return res.redirect(itemProfileUrl);
-    }
-
-    const stockSummary = await getItemStockSummary(itemType, item._id);
-    const sourceEntry = stockSummary.locations.find((entry) => entry.location === fromLocation);
-    const currentQuantity = toNumber(sourceEntry?.qty);
-    const sourceBooked = toNumber(sourceEntry?.booked);
-    const createdBy = req.user?.username || req.session?.authUser?.username || "SYSTEM";
-
-    console.log(`[STOCK_EDIT] ${itemType} ${item._id} | From: ${fromLocation} To: ${toLocation} | ReqQty: ${requestedQuantity} | CurrQty: ${currentQuantity} | Booked: ${sourceBooked}`);
-
-    if (!sourceEntry && currentQuantity === 0 && sourceBooked === 0) {
-      req.flash("notification", "Stock location not found");
-      return res.redirect(itemProfileUrl);
-    }
-
-    const extraFields = itemType === "Tape" ? { tapeFinish: item.tapeFinish } : {};
-
-    if (fromLocation === toLocation) {
-      const delta = requestedQuantity - currentQuantity;
-      if (delta === 0) {
-        req.flash("notification", "Stock is already up to date");
-        return res.redirect(itemProfileUrl);
-      }
-
-      await applyItemStockDelta({
-        itemType,
-        itemId: item._id,
-        location: fromLocation,
-        delta,
-        remarks: `${itemType} stock adjusted to ${requestedQuantity} from profile`,
-        createdBy,
-        extraFields,
-      });
-      res.locals.auditDescription = `Adjusted ${itemType} "${itemLabel}" stock at "${fromLocation}" to ${requestedQuantity} (was ${currentQuantity})`;
-      req.flash("notification", `${itemType} stock updated successfully.`);
-      return res.redirect(itemProfileUrl);
-    }
-
-    if (sourceBooked > 0) {
-      req.flash("notification", `Cannot move stock from ${fromLocation} while booked quantity (${sourceBooked}) exists.`);
-      return res.redirect(itemProfileUrl);
-    }
-
-    if (currentQuantity !== 0) {
-      await applyItemStockDelta({
-        itemType,
-        itemId: item._id,
-        location: fromLocation,
-        delta: -currentQuantity,
-        remarks: `${itemType} stock moved from ${fromLocation} to ${toLocation} via profile`,
-        createdBy,
-        extraFields,
-      });
-    }
-
-    if (requestedQuantity !== 0) {
-      await applyItemStockDelta({
-        itemType,
-        itemId: item._id,
-        location: toLocation,
-        delta: requestedQuantity,
-        remarks: `${itemType} stock moved from ${fromLocation} to ${toLocation} via profile`,
-        createdBy,
-        extraFields,
-      });
-    }
-
-    res.locals.auditDescription = `Moved ${itemType} "${itemLabel}" stock (qty ${requestedQuantity || currentQuantity}) from "${fromLocation}" to "${toLocation}"`;
-    req.flash("notification", `${itemType} stock location updated successfully.`);
-    return res.redirect(itemProfileUrl);
-  } catch (err) {
-    console.error(`${itemType.toUpperCase()} PROFILE STOCK EDIT ERROR:`, err);
-    req.flash("notification", `Failed to update ${itemType} stock`);
-    return res.redirect(`${redirectPath}/${req.params.id}`);
-  }
 }
 
 function buildSalesOrderSignature({
@@ -686,20 +446,14 @@ router.use((req, res, next) => {
       "/master/view",
       "/client/view",
       "/form/client",
-      "/tape/view",
-      "/form/tape-binding",
       "/stocks/view",
       "/pettycash/view",
       "/labels/view",
-      "/form/tape-master",
     ];
 
     const allowedGetPatterns = [
       /^\/form\/client\/[^/]+$/,
       /^\/client\/details\/[^/]+$/,
-      /^\/tape\/profile\/[^/]+$/,
-      /^\/tape\/edit\/[^/]+$/,
-      /^\/form\/tape-binding(?:\/.*)?$/,
       /^\/api\/motivational$/,
       /^\/form\/labels\/.*$/,
       /^\/api\/locations$/,
@@ -712,18 +466,15 @@ router.use((req, res, next) => {
     const allowedPostRoutes = [
       /^\/form\/client$/,
       /^\/form\/user$/,
-      /^\/form\/tape-binding$/,
-      /^\/tape\/edit\/[^/]+$/,
       /^\/pettycash\/create$/,
       /^\/labels\/edit\/[^/]+$/,
-      /^\/form\/tape$/,
     ];
 
     if (req.method === "GET") {
       const normalizedPath = path.toLowerCase().replace(/\/$/, "");
 
       // Explicit keyword matches for resilience
-      const keywords = ["master/view", "compare", "binding", "welcome", "api/motivational", "tape/view", "client", "vendor", "user", "stocks", "pettycash"];
+      const keywords = ["master/view", "compare", "binding", "welcome", "api/motivational", "client", "vendor", "user", "stocks", "pettycash"];
       if (keywords.some(k => normalizedPath.includes(k))) return next();
 
       if (allowedGetRoutes.includes(normalizedPath) || allowedGetPatterns.some((re) => re.test(path))) {
@@ -1150,13 +901,72 @@ router.post("/form/user", requireAuth, createLimiter, async (req, res) => {
 
 // ----------------------------------Company Tasks---------------------------------->
 
-// Tasks are personal: a user only ever sees/manages tasks they themselves
-// created — this is a private to-do list, not a delegation tool. Ownership
-// is keyed strictly on the individual employee's empId — never on role —
-// so no two employees (or dev backdoor logins, which have no empId at all
-// and therefore can never own or see a task) ever share a task bucket.
+/* A task is work one person hands another: it carries an assignee, that person
+   finds it under "Assigned to me", and the header bell tells them it arrived.
+   So "whose task is this" has three answers, and the server decides each one
+   — hiding a tab in the page is not a permission:
+
+     mine      assignedTo = my Employee._id   (the default view)
+     created   createdBy  = my empId code     (what this page used to show)
+     all       every task                     (proprietor / admin / hod only)
+
+   Ownership is still keyed on the individual, never on role. The dev backdoor
+   logins (PROPRIETOR_USER etc.) have no employee record at all, so they have
+   no empId and no Employee._id: they cannot be assigned work and cannot see
+   anyone's bucket — which is what kept this data private before and still does.
+
+   Who may change what (enforced in the PUT/DELETE handlers):
+     creator, or a role with "all" scope   everything, delete included
+     assignee                              status only — it is their work
+     anyone else                           nothing, answered as "not found"
+                                           so a task id gives nothing away */
+const TASK_SCOPES = ["mine", "created", "all"];
+const TASK_ALL_SCOPE_ROLES = ["proprietor", "admin", "hod"];
+const TASK_STATUS_LABELS = { PENDING: "Pending", IN_PROGRESS: "In Progress", COMPLETED: "Completed" };
+
+// The creator's own handle: their empId code. Unchanged — the Daybook keys its
+// rows on the same string, so this stays the "created by me" identity.
 function sessionOwnerKey(req) {
   return req.session?.authUser?.empId || null;
+}
+
+function canSeeAllTasks(req) {
+  return TASK_ALL_SCOPE_ROLES.includes(String(req.session?.authUser?.role || "").toLowerCase());
+}
+
+// Everything the current user is party to — theirs to see, and the set the
+// Daybook may pull from. An assignee can put their own work in their Daybook;
+// before assignment existed this was "created by me" alone.
+function taskVisibilityFilter({ ownerKey, employeeId }) {
+  const or = [];
+  if (ownerKey) or.push({ createdBy: ownerKey });
+  if (employeeId) or.push({ assignedTo: employeeId });
+  // No identity at all (dev backdoor): match nothing rather than everything.
+  if (!or.length) return { _id: null };
+  return or.length === 1 ? or[0] : { $or: or };
+}
+
+function taskScopeFilter(scope, { ownerKey, employeeId, canAll }) {
+  if (scope === "all" && canAll) return {};
+  if (scope === "created") return ownerKey ? { createdBy: ownerKey } : { _id: null };
+  return employeeId ? { assignedTo: employeeId } : { _id: null };
+}
+
+// What the row's buttons are allowed to do. Sent to the page so it can hide
+// what this user can't use; the POST/PUT/DELETE handlers check the same facts
+// again, because the page is only a convenience.
+function taskPermissions(task, { ownerKey, employeeId, canAll }) {
+  const isCreator = Boolean(ownerKey) && String(task.createdBy || "") === String(ownerKey);
+  const assigneeId = task.assignedTo?._id ?? task.assignedTo;
+  const isAssignee = Boolean(employeeId) && String(assigneeId || "") === String(employeeId);
+  return {
+    isCreator,
+    isAssignee,
+    canEdit: isCreator || canAll,
+    canDelete: isCreator || canAll,
+    // Progressing the work is the assignee's job as much as the creator's.
+    canSetStatus: isCreator || canAll || isAssignee,
+  };
 }
 
 // "Others" resolution for the task Assigned Employee / Client fields.
@@ -1169,10 +979,25 @@ async function resolveTaskAssignee(assignedToId, assignedToManualName) {
   if (!assignedToId || !mongoose.isValidObjectId(assignedToId)) {
     throw new Error("Please select an employee to assign this task to.");
   }
+  // The id has to exist — an assignee nobody can resolve is a task nobody
+  // will ever see in their list.
   const employee = await Employee.findById(assignedToId).select("empName").lean();
   if (!employee) throw new Error("Selected employee was not found.");
   return { assignedTo: assignedToId, assignedToIsOthers: false, assignedToOthers: undefined, empName: employee.empName };
 }
+
+// Who to tell when a task is completed. Tasks created before createdById
+// existed carry only the creator's empId code, so fall back to resolving it —
+// one lookup, and only for those older rows (scripts/backfill-task-assignee.js
+// fills them in for good).
+async function taskCreatorRecipientId(task) {
+  if (task.createdById) return String(task.createdById);
+  if (!task.createdBy) return null;
+  const employee = await Employee.findOne({ empId: task.createdBy }).select("_id").lean();
+  return employee ? String(employee._id) : null;
+}
+
+const TASK_LINK = (id) => `/app/tasks?open=${id}`;
 
 async function resolveTaskClient(clientId, clientManualName) {
   if (!clientId) return { client: null, clientIsOthers: false, clientOthers: undefined };
@@ -1189,33 +1014,101 @@ async function resolveTaskClient(clientId, clientManualName) {
 
 router.get("/tasks", async (req, res) => {
   const ownerKey = sessionOwnerKey(req);
+  const employeeId = await sessionEmployeeId(req);
+  const canAll = canSeeAllTasks(req);
+
+  // A bell row arrives as ?open=<taskId>. The task has to be in the view the
+  // page opens on or the link lands on a list it isn't in, so when no scope
+  // was asked for, the scope follows the task.
+  const openId = mongoose.isValidObjectId(req.query.open) ? String(req.query.open) : "";
+  let scope = TASK_SCOPES.includes(req.query.scope) ? req.query.scope : "";
+  if (scope === "all" && !canAll) scope = "";
+
+  if (openId && !scope) {
+    const target = await Task.findOne({ _id: openId, deletedAt: null })
+      .select("assignedTo createdBy")
+      .lean();
+    if (target) {
+      const perms = taskPermissions(target, { ownerKey, employeeId, canAll });
+      scope = perms.isAssignee ? "mine" : perms.isCreator ? "created" : canAll ? "all" : "";
+    }
+  }
+  // Default view is the person's own work. Someone with no employee record
+  // behind their session (dev backdoor) has no "mine", so they start on what
+  // they created.
+  if (!scope) scope = employeeId ? "mine" : "created";
+
+  const filter = { deletedAt: null, ...taskScopeFilter(scope, { ownerKey, employeeId, canAll }) };
+
   const [tasks, employees, clients, daybookEntries] = await Promise.all([
-    ownerKey
-      ? Task.find({ deletedAt: null, createdBy: ownerKey })
-          // Task lives on an isolated database connection (config/tasksDb.js), so
-          // Mongoose can't resolve these refs by name — pass the actual models.
-          .populate({ path: "assignedTo", select: "empName empId", model: Employee })
-          .populate({ path: "client", select: "clientName clientId", model: Client })
-          .sort({ createdAt: -1 })
-          .lean()
-      : [],
+    Task.find(filter)
+      // Task lives on an isolated database connection (config/tasksDb.js), so
+      // Mongoose can't resolve these refs by name — pass the actual models.
+      .populate({ path: "assignedTo", select: "empName empId", model: Employee })
+      .populate({ path: "client", select: "clientName clientId", model: Client })
+      .sort({ createdAt: -1 })
+      .lean(),
     Employee.find({ isActive: true }, "empName empId").sort({ empName: 1 }).lean(),
     Client.find().select("clientName clientId").sort({ clientName: 1 }).lean(),
     ownerKey ? DaybookEntry.find({ createdBy: ownerKey }).select("task").lean() : [],
   ]);
 
   const daybookTaskIds = daybookEntries.map((e) => String(e.task));
+  const rows = tasks.map((task) => ({ ...task, perms: taskPermissions(task, { ownerKey, employeeId, canAll }) }));
 
   res.render("miscellaneous/tasks.ejs", {
     title: "Company Tasks",
     CSS: "tableDisp.css",
     JS: false,
-    tasks,
+    tasks: rows,
     daybookTaskIds,
     employees,
     clients,
+    scope,
+    canSeeAllTasks: canAll,
+    hasEmployeeIdentity: Boolean(employeeId),
+    openTaskId: openId,
     notification: req.flash("notification"),
   });
+});
+
+/* My Tasks: everything assigned to me, split the three ways that actually
+   matter on a worklist. JSON so the page can show live counts without a
+   reload, and so anything else that wants "what is on this person's plate"
+   (a dashboard tile, the mobile app) has one answer to read. Always scoped to
+   the session — there is no way to ask for someone else's. */
+router.get("/tasks/mine", async (req, res) => {
+  const employeeId = await sessionEmployeeId(req);
+  const empty = { open: [], overdue: [], done: [], counts: { open: 0, overdue: 0, done: 0 } };
+  if (!employeeId) return res.json(empty);
+
+  try {
+    const tasks = await Task.find({ deletedAt: null, assignedTo: employeeId })
+      .select("title label status dueDate createdByName createdBy client clientIsOthers clientOthers completedAt createdAt")
+      .populate({ path: "client", select: "clientName", model: Client })
+      .sort({ dueDate: 1, createdAt: -1 })
+      .lean();
+
+    // Overdue is measured against the start of today, so a task due today is
+    // still open, not already late.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const result = { open: [], overdue: [], done: [] };
+    for (const task of tasks) {
+      if (task.status === "COMPLETED") result.done.push(task);
+      else if (task.dueDate && new Date(task.dueDate) < startOfToday) result.overdue.push(task);
+      else result.open.push(task);
+    }
+
+    res.json({
+      ...result,
+      counts: { open: result.open.length, overdue: result.overdue.length, done: result.done.length },
+    });
+  } catch (err) {
+    console.error("MY TASKS ERROR:", err);
+    res.status(500).json(empty);
+  }
 });
 
 // POST: Create a task
@@ -1237,9 +1130,33 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: "Task title is required." });
     }
 
+    const myEmployeeId = await sessionEmployeeId(req);
+    const myName = sessionDisplayName(req);
+
+    /* Two kinds of new task, chosen in the dialog (TASK_ASSIGN_MODES):
+         "send"  hand it to an employee — it lands in their "Assigned to me"
+                 and rings their bell;
+         "self"  keep it as my own reminder — it is MY task, so nobody else
+                 sees it and nobody is notified. Due reminders ring my own
+                 bell, which is the point of a reminder.
+       In self mode the posted assignedTo is ignored outright rather than
+       trusted: whatever the dialog last had selected, a reminder can only
+       ever be assigned to the person creating it. */
+    const assignMode = req.body.assignMode === "self" ? "self" : "send";
+
     let assignee, clientInfo;
     try {
-      assignee = await resolveTaskAssignee(assignedTo, assignedToManualName);
+      if (assignMode === "self") {
+        if (!myEmployeeId) {
+          return res.status(400).json({
+            success: false,
+            message: "Your login isn't linked to an employee record, so a task can't be kept for you. Pick an employee to send it to instead.",
+          });
+        }
+        assignee = { assignedTo: myEmployeeId, assignedToIsOthers: false, assignedToOthers: undefined, empName: myName };
+      } else {
+        assignee = await resolveTaskAssignee(assignedTo, assignedToManualName);
+      }
       clientInfo = await resolveTaskClient(client, clientManualName);
     } catch (err) {
       return res.status(400).json({ success: false, message: err.message });
@@ -1254,17 +1171,46 @@ router.post("/tasks", requireAuth, createLimiter, async (req, res) => {
       assignedTo: assignee.assignedTo,
       assignedToIsOthers: assignee.assignedToIsOthers,
       assignedToOthers: assignee.assignedToOthers,
+      assignedToName: assignee.empName,
       client: clientInfo.client,
       clientIsOthers: clientInfo.clientIsOthers,
       clientOthers: clientInfo.clientOthers,
       dueDate: dueDate || undefined,
       status: taskStatus,
+      completedAt: taskStatus === "COMPLETED" ? new Date() : null,
       createdBy: ownerKey,
+      createdById: myEmployeeId || undefined,
+      createdByName: myName,
     });
 
-    res.locals.auditDescription = `Created task "${task.title}" assigned to "${assignee.empName}"`;
-    req.flash("notification", "Task created successfully!");
-    res.json({ success: true, redirect: "/app/tasks" });
+    // Save first, then tell the assignee — and only after the write has
+    // succeeded. A kept reminder notifies nobody at all; the actorId guard in
+    // notify() would drop it anyway (I am the assignee), but not sending it is
+    // the intent rather than a side effect.
+    if (assignMode === "send" && assignee.assignedTo) {
+      await notify({
+        userIds: [assignee.assignedTo],
+        actorId: myEmployeeId,
+        actorName: myName,
+        type: "task.assigned",
+        title: `${myName} assigned you: ${task.title}`,
+        body: task.dueDate ? `Due ${new Date(task.dueDate).toLocaleDateString("en-GB")}` : "",
+        link: TASK_LINK(task._id),
+        refModel: "Task",
+        refId: task._id,
+      });
+    }
+
+    res.locals.auditDescription =
+      assignMode === "self"
+        ? `Created personal reminder "${task.title}"`
+        : `Created task "${task.title}" assigned to "${assignee.empName}"`;
+    req.flash("notification", assignMode === "self" ? "Reminder saved for you." : "Task created successfully!");
+    // Land on the new task rather than on a fixed view: the default view is
+    // "Assigned to me", so a task just handed to somebody else would not be
+    // in it and the save would look as though it had failed. ?open= lets the
+    // page pick the view that holds it and flash the row.
+    res.json({ success: true, redirect: `/app/tasks?open=${task._id}` });
   } catch (err) {
     console.error("TASK CREATE ERROR:", err);
     res.status(500).json({ success: false, message: "Failed to create task." });
@@ -1307,6 +1253,7 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
       update.assignedTo = assignee.assignedTo;
       update.assignedToIsOthers = assignee.assignedToIsOthers;
       update.assignedToOthers = assignee.assignedToOthers ?? null;
+      update.assignedToName = assignee.empName;
     }
     if (req.body.client !== undefined) {
       let clientInfo;
@@ -1321,17 +1268,112 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
     }
 
     const ownerKey = sessionOwnerKey(req);
-    if (!ownerKey) {
+    const employeeId = await sessionEmployeeId(req);
+    const canAll = canSeeAllTasks(req);
+    if (!ownerKey && !employeeId) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
 
+    // Read it first: the old assignee and the old status are what decide who
+    // gets told, and they're gone once the update lands.
+    const existing = await Task.findOne({ _id: req.params.id, deletedAt: null }).lean();
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Task not found." });
+    }
+
+    const perms = taskPermissions(existing, { ownerKey, employeeId, canAll });
+    // A task someone else owns and hasn't given you reads as missing, so an
+    // id guessed or kept from an old link tells the holder nothing.
+    if (!perms.canEdit && !perms.canSetStatus) {
+      return res.status(404).json({ success: false, message: "Task not found." });
+    }
+    // The assignee progresses the work; the rest of the task is the creator's.
+    if (!perms.canEdit && Object.keys(update).some((field) => field !== "status")) {
+      return res.status(403).json({
+        success: false,
+        message: "This task is assigned to you — you can change its status, but only the person who created it can edit it.",
+      });
+    }
+
+    const statusChanged = update.status !== undefined && update.status !== existing.status;
+    if (statusChanged) {
+      update.completedAt = update.status === "COMPLETED" ? new Date() : null;
+    }
+
     const updated = await Task.findOneAndUpdate(
-      { _id: req.params.id, deletedAt: null, createdBy: ownerKey },
+      { _id: req.params.id, deletedAt: null },
       update,
       { new: true, runValidators: true },
     );
     if (!updated) {
       return res.status(404).json({ success: false, message: "Task not found." });
+    }
+
+    /* Notifications, after the save and never for your own doing. Editing
+       other fields — title, label, due date, client — notifies nobody. */
+    const myName = sessionDisplayName(req);
+    const oldAssignee = existing.assignedTo ? String(existing.assignedTo) : "";
+    const newAssignee = updated.assignedTo ? String(updated.assignedTo) : "";
+    const assigneeChanged = update.assignedTo !== undefined && oldAssignee !== newAssignee;
+
+    if (assigneeChanged && newAssignee) {
+      await notify({
+        userIds: [newAssignee],
+        actorId: employeeId,
+        actorName: myName,
+        type: "task.assigned",
+        title: `${myName} assigned you: ${updated.title}`,
+        body: updated.dueDate ? `Due ${new Date(updated.dueDate).toLocaleDateString("en-GB")}` : "",
+        link: TASK_LINK(updated._id),
+        refModel: "Task",
+        refId: updated._id,
+      });
+    }
+    // The person it was taken off is told too — otherwise they keep working on
+    // something that is no longer theirs.
+    if (assigneeChanged && oldAssignee) {
+      await notify({
+        userIds: [oldAssignee],
+        actorId: employeeId,
+        actorName: myName,
+        type: "task.unassigned",
+        title: `${myName} moved this task off you: ${updated.title}`,
+        body: updated.assignedToName ? `Now with ${updated.assignedToName}` : "",
+        link: TASK_LINK(updated._id),
+        refModel: "Task",
+        refId: updated._id,
+      });
+    }
+
+    if (statusChanged && updated.status === "COMPLETED") {
+      const creatorId = await taskCreatorRecipientId(existing);
+      if (creatorId) {
+        await notify({
+          userIds: [creatorId],
+          actorId: employeeId,
+          actorName: myName,
+          type: "task.done",
+          title: `${myName} completed: ${updated.title}`,
+          link: TASK_LINK(updated._id),
+          refModel: "Task",
+          refId: updated._id,
+        });
+      }
+    }
+    // Someone else moving your task along is news to you as well. Not sent
+    // when the assignee is the one doing it (notify() drops the actor), and
+    // not sent for an assignee who was just told they were given the task.
+    if (statusChanged && newAssignee && !assigneeChanged) {
+      await notify({
+        userIds: [newAssignee],
+        actorId: employeeId,
+        actorName: myName,
+        type: "task.updated",
+        title: `${myName} marked your task ${TASK_STATUS_LABELS[updated.status] || updated.status}: ${updated.title}`,
+        link: TASK_LINK(updated._id),
+        refModel: "Task",
+        refId: updated._id,
+      });
     }
 
     res.locals.auditDescription = `Updated task "${updated.title}"`;
@@ -1345,13 +1387,25 @@ router.put("/api/tasks/:id", requireAuth, updateLimiter, async (req, res) => {
 // DELETE: Soft-delete a task (hidden from listings, not removed from the database)
 router.delete("/api/tasks/:id", requireAuth, deleteLimiter, async (req, res) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid task id." });
+    }
     const ownerKey = sessionOwnerKey(req);
-    if (!ownerKey) {
+    const employeeId = await sessionEmployeeId(req);
+    const canAll = canSeeAllTasks(req);
+    if (!ownerKey && !employeeId) {
+      return res.status(404).json({ success: false, message: "Task not found." });
+    }
+
+    const existing = await Task.findOne({ _id: req.params.id, deletedAt: null }).select("title createdBy assignedTo").lean();
+    // Deleting is the creator's call (or an all-scope role's). An assignee
+    // can finish a task or hand it back, not make it disappear.
+    if (!existing || !taskPermissions(existing, { ownerKey, employeeId, canAll }).canDelete) {
       return res.status(404).json({ success: false, message: "Task not found." });
     }
 
     const deleted = await Task.findOneAndUpdate(
-      { _id: req.params.id, deletedAt: null, createdBy: ownerKey },
+      { _id: req.params.id, deletedAt: null },
       { deletedAt: new Date() },
       { new: true },
     ).select("title").lean();
@@ -1378,6 +1432,12 @@ function todayDayKey() {
 
 router.get("/daybook", async (req, res) => {
   const ownerKey = sessionOwnerKey(req);
+  // The Daybook is "what I am working on today", so it draws on everything
+  // this person is party to: tasks they created AND tasks assigned to them.
+  // Before tasks could be delegated these were the same set.
+  const employeeId = await sessionEmployeeId(req);
+  const mineFilter = taskVisibilityFilter({ ownerKey, employeeId });
+  const hasIdentity = Boolean(ownerKey || employeeId);
 
   const [entries, availableTasks, completedTasks] = await Promise.all([
     ownerKey
@@ -1393,16 +1453,16 @@ router.get("/daybook", async (req, res) => {
           .sort({ createdAt: 1 })
           .lean()
       : [],
-    ownerKey
-      ? Task.find({ deletedAt: null, createdBy: ownerKey, status: { $ne: "COMPLETED" } })
+    hasIdentity
+      ? Task.find({ deletedAt: null, ...mineFilter, status: { $ne: "COMPLETED" } })
           .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers")
           .populate({ path: "assignedTo", select: "empName", model: Employee })
           .populate({ path: "client", select: "clientName", model: Client })
           .sort({ createdAt: -1 })
           .lean()
       : [],
-    ownerKey
-      ? Task.find({ deletedAt: null, createdBy: ownerKey, status: "COMPLETED" })
+    hasIdentity
+      ? Task.find({ deletedAt: null, ...mineFilter, status: "COMPLETED" })
           .select("title label status dueDate assignedTo assignedToIsOthers assignedToOthers client clientIsOthers clientOthers")
           .populate({ path: "assignedTo", select: "empName empId", model: Employee })
           .populate({ path: "client", select: "clientName clientId", model: Client })
@@ -1444,7 +1504,14 @@ router.post("/daybook", requireAuth, createLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: "Please select at least one task." });
     }
 
-    const ownedTasks = await Task.find({ _id: { $in: validIds }, deletedAt: null, createdBy: ownerKey }).select("_id").lean();
+    // Pickable = mine to see (created by me or assigned to me), the same set
+    // GET /daybook lists. Anything else is silently not picked.
+    const employeeId = await sessionEmployeeId(req);
+    const ownedTasks = await Task.find({
+      _id: { $in: validIds },
+      deletedAt: null,
+      ...taskVisibilityFilter({ ownerKey, employeeId }),
+    }).select("_id").lean();
     const ownedIds = new Set(ownedTasks.map((t) => String(t._id)));
     if (!ownedIds.size) {
       return res.status(400).json({ success: false, message: "No valid tasks selected." });
@@ -1636,126 +1703,6 @@ router.post("/form/samples", requireAuth, createLimiter, async (req, res) => {
     res.status(400).json({ success: false, message: err.message });
   }
 });
-
-// ----------------------------------Tape Master---------------------------------->
-
-// GET: Tape Master form
-router.get("/form/tape-master", async (req, res) => {
-  const formatTapeId = (n) => `FS | Tape | ${String(n).padStart(6, "0")}`;
-  const parseTapeSeq = (productId) => {
-    const match = String(productId || "").match(/(\d{6})$/);
-    return match ? Number(match[1]) : 0;
-  };
-  const getNextTapeIdPreview = async () => {
-    const latestTape = await Tape.findOne().sort({ tapeProductId: -1 }).select("tapeProductId").lean();
-    let nextSeq = parseTapeSeq(latestTape?.tapeProductId) + 1;
-
-    while (await Tape.exists({ tapeProductId: formatTapeId(nextSeq) })) {
-      nextSeq += 1;
-    }
-    return formatTapeId(nextSeq);
-  };
-
-  const previewTapeProductId = await getNextTapeIdPreview();
-
-  res.render("inventory/tape/tape.ejs", {
-    JS: false,
-    CSS: false,
-    title: "Tape Master",
-    previewTapeProductId,
-    notification: req.flash("notification"),
-  });
-});
-
-// POST: Tape Master submission
-router.post("/form/tape", requireAuth, createLimiter, async (req, res) => {
-  try {
-    const formatTapeId = (n) => `FS | Tape | ${String(n).padStart(6, "0")}`;
-    const parseTapeSeq = (productId) => {
-      const match = String(productId || "").match(/(\d{6})$/);
-      return match ? Number(match[1]) : 0;
-    };
-    const generateTapeProductId = async () => {
-      let nextSeq = parseTapeSeq(
-        (await Tape.findOne().sort({ tapeProductId: -1 }).select("tapeProductId").lean())?.tapeProductId,
-      ) + 1;
-
-      const maxAttempts = 10000;
-      for (let i = 0; i < maxAttempts; i++) {
-        const candidateId = formatTapeId(nextSeq);
-        const exists = await Tape.exists({ tapeProductId: candidateId });
-        if (!exists) return candidateId;
-        nextSeq += 1;
-      }
-      throw new Error("Unable to generate unique tape product id");
-    };
-
-    // Prevent duplicates based on tape specs (productId is always unique).
-    const tapeSignature = hashSignature(buildTapeSignature(req.body));
-    const widthRaw = req.body.tapeWidth;
-    const widthTrim = typeof widthRaw === "string" ? widthRaw.trim() : widthRaw;
-    const widthNum = typeof widthTrim === "string" ? Number(widthTrim) : Number(widthTrim);
-    const widthVal =
-      typeof widthTrim === "string" && widthTrim !== "" && !Number.isNaN(widthNum) ? widthNum : widthTrim;
-    const tapeCoreId = normalizeTapeCoreId(req.body.tapeCoreId);
-
-    const duplicateTapeQuery = {
-      $or: [
-        { tapeSignature },
-        {
-          tapePaperCode: flexTapeValue(req.body.tapePaperCode),
-          tapeGsm: flexTapeValue(Number(req.body.tapeGsm)),
-          tapePaperType: flexTapeValue(req.body.tapePaperType),
-          tapeWidth: flexTapeValue(widthVal),
-          tapeMtrs: flexTapeValue(Number(req.body.tapeMtrs)),
-          tapeCoreId: flexTapeValue(Number(tapeCoreId)),
-          tapeAdhesiveGsm: flexTapeValue(req.body.tapeAdhesiveGsm),
-          tapeFinish: flexTapeValue(req.body.tapeFinish),
-        },
-      ],
-    };
-    const alreadyExists = await Tape.findOne(duplicateTapeQuery).select("tapeProductId").lean();
-    if (alreadyExists) {
-      return res.status(400).json({
-        success: false,
-        message: duplicateMasterMessage("Tape", alreadyExists.tapeProductId),
-      });
-    }
-
-    const data = {
-      tapeProductId: await generateTapeProductId(),
-      tapePaperCode: String(req.body.tapePaperCode).trim(),
-      tapeGsm: Number(req.body.tapeGsm),
-      tapePaperType: String(req.body.tapePaperType).trim(),
-      tapeWidth: widthVal,
-      tapeMtrs: Number(req.body.tapeMtrs),
-      tapeCoreId: Number(tapeCoreId),
-      tapeAdhesiveGsm: String(req.body.tapeAdhesiveGsm).trim(),
-      tapeFinish: String(req.body.tapeFinish).trim(),
-      tapeSignature,
-      createdBy: req.user?.username || "SYSTEM",
-    };
-
-    await Tape.create(data);
-
-    res.locals.auditDescription = `Created tape master "${data.tapeProductId}" (${data.tapePaperCode}, ${data.tapeGsm}gsm)`;
-    req.flash("notification", "Tape Master created successfully!");
-    res.json({ success: true, redirect: "/app/tape/view" });
-  } catch (err) {
-    console.error(err);
-    if (err?.code === 11000) {
-      const duplicateTape = await Tape.findOne({ tapeSignature: hashSignature(buildTapeSignature(req.body)) })
-        .select("tapeProductId")
-        .lean();
-      return res.status(409).json({
-        success: false,
-        message: duplicateMasterMessage("Tape", duplicateTape?.tapeProductId),
-      });
-    }
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
 
 // Route to render Edit USER form
 router.get("/form/edit/user/:userId", async (req, res) => {
@@ -2013,153 +1960,6 @@ router.delete("/api/locations/:id", requireAuth, deleteLimiter, async (req, res)
 // it now feeds -- see server.js for why that router is mounted ahead of this
 // one.
 
-// ================= TAPE MASTER LIST VIEW =================
-router.get("/tape/view", async (req, res) => {
-  const tapes = await Tape.find().sort({ tapeProductId: 1 }).lean();
-  const tapeIds = tapes.map((t) => t._id).filter(Boolean);
-
-  const [stockAgg, bindingAgg, vendorBindingAgg] = await Promise.all([
-    tapeIds.length
-      ? TapeStock.aggregate([
-          { $match: { tape: { $in: tapeIds } } },
-          {
-            $group: {
-              _id: "$tape",
-              qty: { $sum: "$quantity" },
-            },
-          },
-        ])
-      : [],
-    tapeIds.length
-      ? TapeBinding.aggregate([
-          { $match: { tapeId: { $in: tapeIds } } },
-          {
-            $group: {
-              _id: "$tapeId",
-              count: { $sum: 1 },
-            },
-          },
-        ])
-      : [],
-    tapeIds.length
-      ? VendorTapeBinding.aggregate([
-          { $match: { tapeId: { $in: tapeIds } } },
-          {
-            $group: {
-              _id: "$tapeId",
-              count: { $sum: 1 },
-            },
-          },
-        ])
-      : []
-  ]);
-
-  const stockByItem = {};
-  stockAgg.forEach((row) => {
-    const itemId = String(row._id || "");
-    stockByItem[itemId] = Number(row.qty || 0);
-  });
-
-  const bindingsByItem = {};
-  bindingAgg.forEach((row) => {
-    const itemId = String(row._id || "");
-    bindingsByItem[itemId] = Number(row.count || 0);
-  });
-
-  const vendorBindingsByItem = {};
-  vendorBindingAgg.forEach((row) => {
-    const itemId = String(row._id || "");
-    vendorBindingsByItem[itemId] = Number(row.count || 0);
-  });
-
-  tapes.forEach((t) => {
-    const itemId = String(t._id);
-    t.stock = stockByItem[itemId] ?? 0;
-    t.bindingCount = bindingsByItem[itemId] ?? 0;
-    t.vendorBindingCount = vendorBindingsByItem[itemId] ?? 0;
-  });
-
-  res.render("inventory/tape/tapeMasterDisp.ejs", {
-    jsonData: tapes,
-    CSS: "tableDisp.css",
-    JS: false,
-    title: "Tape View",
-    notification: req.flash("notification"),
-  });
-});
-
-// ================= TTR MASTER LIST VIEW =================
-// ================= TAPE PROFILE VIEW =================
-router.get("/tape/profile/:id", async (req, res) => {
-  const tape = await Tape.findById(req.params.id).lean();
-
-  if (!tape) {
-    req.flash("notification", "Tape not found");
-    return res.redirect("back");
-  }
-
-  const tapeBindings = await TapeBinding.find({ tapeId: req.params.id })
-    .populate({ path: "userId", select: "userName clientName hoLocation" })
-    .sort({ createdAt: -1 })
-    .lean();
-
-  const primaryBinding = tapeBindings[0] || null;
-  const backUrl = primaryBinding?.userId?._id
-    ? `/app/client/details/${primaryBinding.userId._id}`
-    : "/app/tape/view";
-  const stockSummary = await getItemStockSummary("Tape", tape._id);
-  const locationOptions = await Location.find().sort({ locationName: 1 }).lean();
-
-  const rows = [
-    { label: "Product ID", value: tape.tapeProductId || "N/A" },
-    { label: "Paper Code", value: tape.tapePaperCode || "N/A" },
-    { label: "GSM", value: tape.tapeGsm ?? "N/A" },
-    { label: "Paper Type", value: tape.tapePaperType || "N/A" },
-    { label: "Adhesive GSM", value: tape.tapeAdhesiveGsm ?? "N/A" },
-    { label: "Width", value: tape.tapeWidth ?? "N/A" },
-    { label: "Meters", value: tape.tapeMtrs ?? "N/A" },
-    { label: "Core ID", value: tape.tapeCoreId ?? "N/A" },
-    { label: "Finish", value: tape.tapeFinish || "N/A" },
-    { label: "Min Stock Qty", value: tape.tapeMinQty ?? "N/A" },
-  ];
-
-  res.render("inventory/itemView.ejs", {
-    pageTitle: "Tape Details",
-    sectionTitle: "Tape Details",
-    valueHeader: "Value",
-    statusUrl: `/app/tape/edit/${tape._id}`,
-    currentStatus: tape.status || "ACTIVE",
-    rows,
-    tape,
-    tapeBindings,
-    primaryBinding,
-    backUrl,
-    stockInfo: {
-      totalStock: stockSummary.totalStock,
-      locations: stockSummary.locations,
-      booked: stockSummary.totalBooked,
-      balance: stockSummary.totalBalance,
-    },
-    stockEditConfig: {
-      enabled: true,
-      itemType: "Tape",
-      editAction: `/app/tape/profile/${tape._id}/stock/edit`,
-      locationOptions: locationOptions.map((entry) => canonicalizeLocationName(entry.locationName)).filter(Boolean),
-    },
-    title: "Tape Details",
-    CSS: false,
-    JS: false,
-    notification: req.flash("notification"),
-  });
-});
-
-router.post("/tape/profile/:id/stock/edit", requireAuth, updateLimiter, async (req, res) =>
-  handleProfileStockEdit(req, res, {
-    itemType: "Tape",
-    model: Tape,
-    redirectPath: "/app/tape/profile",
-  }));
-
 function normalizePosPart(value) {
   if (value === undefined || value === null) return "";
   return String(value).trim();
@@ -2198,78 +1998,16 @@ function flexPosValue(val) {
   return { $in: arr };
 }
 
-function normalizeTapePart(value) {
-  if (value === undefined || value === null) return "";
-  return String(value).trim();
-}
-
-function normalizeTapeCoreId(value) {
-  const raw = normalizeTapePart(value);
-  if (!raw) return "";
-  const numeric = Number(raw);
-  return Number.isFinite(numeric) ? String(numeric) : raw;
-}
-
-function buildTapeSignature(source) {
-  return [
-    normalizeTapePart(source.tapePaperCode),
-    normalizeTapePart(source.tapePaperType),
-    normalizeTapePart(source.tapeGsm),
-    normalizeTapePart(source.tapeWidth),
-    normalizeTapePart(source.tapeMtrs),
-    normalizeTapeCoreId(source.tapeCoreId),
-    normalizeTapePart(source.tapeAdhesiveGsm),
-    normalizeTapePart(source.tapeFinish),
-  ].join("||");
-}
-
-function flexTapeValue(val) {
-  if (val === undefined || val === null) return val;
-  const arr = [val];
-  if (typeof val === "string") {
-    const t = val.trim();
-    if (t !== val) arr.push(t);
-    const n = Number(t);
-    if (t !== "" && !Number.isNaN(n)) arr.push(n);
-  } else {
-    arr.push(String(val));
-  }
-  return { $in: arr };
-}
-
-// ================= TAPE EDIT =================
-router.post("/tape/edit/:id", requireAuth, updateLimiter, async (req, res) => {
-  try {
-    const status = req.body.status === "INACTIVE" ? "INACTIVE" : "ACTIVE";
-    const tapeDoc = await Tape.findByIdAndUpdate(req.params.id, { status }).select("tapeProductId").lean();
-    res.locals.auditDescription = `Set tape "${tapeDoc?.tapeProductId || req.params.id}" status to ${status}`;
-    req.flash("notification", "Tape status updated successfully!");
-    res.redirect(`/app/tape/profile/${req.params.id}`);
-  } catch (err) {
-    console.error(err);
-    req.flash("notification", "Failed to update tape status");
-    res.redirect("back");
-  }
-});
-
-// ================= TTR PROFILE VIEW =================
-// route for vendor form.
-router.get("/form/vendor", async (req, res) => {
-  const { tab, vendorName } = req.query;
-  let vendors = await Vendor.distinct("vendorName");
-  let userCount = await VendorUser.countDocuments();
-  let vendorCount = vendors.length;
-  res.render("users/vendorForm.ejs", {
-    JS: "vendorForm.js?v=5",
-    CSS: "tabOpt.css",
-    title: "Vendor Form",
-    vendorCount,
-    userCount,
-    vendors,
-    tab,
-    vendorName,
-    notification: req.flash("notification"),
-  });
+// The standalone Create Vendor / Create Vendor Coordinator page is now two
+// dialogs: New Vendor on /vendor/view (views/users/_vendorDialog.ejs) and New
+// Coordinator on /vendor/coordinator/view (views/users/_vendorUserDialog.ejs).
+// Old links and bookmarks land here and are forwarded, opening the right dialog.
+router.get("/form/vendor", (req, res) => {
+  const params = new URLSearchParams();
+  const isUser = req.query.tab === "user";
+  params.set("new", isUser ? "coordinator" : "vendor");
+  if (isUser && req.query.vendorName) params.set("vendorName", String(req.query.vendorName));
+  res.redirect(`${isUser ? "/app/vendor/coordinator/view" : "/app/vendor/view"}?${params.toString()}`);
 });
 
 function normalizeVendorPart(value) {
@@ -2362,7 +2100,6 @@ function getVendorSnapshot(vendor, fallback = {}) {
 // Route to handle VENDOR form submission
 router.post("/form/vendor", requireAuth, createLimiter, async (req, res) => {
   try {
-    const vendorId = String(req.body.vendorId || "").trim();
     const vendorName = String(req.body.vendorName || "").trim();
     const vendorGst = String(req.body.vendorGst || "").trim().toUpperCase();
     const vendorPan = String(req.body.vendorPan || "").trim().toUpperCase();
@@ -2392,7 +2129,7 @@ router.post("/form/vendor", requireAuth, createLimiter, async (req, res) => {
     }
 
     const formData = {
-      vendorId,
+      vendorId: await generateVendorId(),
       vendorName,
       vendorStatus: req.body.vendorStatus === "OTHERS" && req.body.otherStatus
         ? `OTHERS - ${String(req.body.otherStatus).trim().toUpperCase().replace(/^(OTHERS - )+/, "")}`
@@ -2423,12 +2160,13 @@ router.post("/form/vendor", requireAuth, createLimiter, async (req, res) => {
       vendorGumasta: String(req.body.vendorGumasta || "").trim(),
       vendorPan,
       vendorSignature,
+      ...verificationUpdate(req).set,
     };
 
     await Vendor.create(formData);
     res.locals.auditDescription = `Created vendor "${vendorName}"`;
     req.flash("notification", "Vendor created successfully!");
-    res.json({ success: true, redirect: "/app/form/vendor" });
+    res.json({ success: true, redirect: "/app/vendor/view" });
   } catch (err) {
     console.error(err);
     if (err?.code === 11000) {
@@ -2451,26 +2189,10 @@ router.get("/form/vendor/:name", async (req, res) => {
   res.status(200).json(vendorData);
 });
 
-router.get("/vendor/edit/:id", async (req, res) => {
-  try {
-    const vendor = await Vendor.findById(req.params.id).lean();
-    if (!vendor) {
-      req.flash("notification", "Vendor not found");
-      return res.redirect("/app/vendor/view");
-    }
-
-    res.render("users/vendorEditForm.ejs", {
-      title: "Edit Vendor",
-      CSS: "tabOpt.css",
-      JS: false,
-      vendor,
-      notification: req.flash("notification"),
-    });
-  } catch (err) {
-    console.error("VENDOR EDIT GET ERROR:", err);
-    req.flash("notification", "Failed to load vendor edit page");
-    res.redirect("/app/vendor/view");
-  }
+// Edit Vendor is a dialog on the vendor's profile page
+// (views/users/_editVendorDialog.ejs); old links forward there and open it.
+router.get("/vendor/edit/:id", (req, res) => {
+  res.redirect(`/app/vendor/profile/${encodeURIComponent(req.params.id)}?edit=1`);
 });
 
 router.post("/vendor/edit/:id", requireAuth, updateLimiter, async (req, res) => {
@@ -2502,7 +2224,7 @@ router.post("/vendor/edit/:id", requireAuth, updateLimiter, async (req, res) => 
     }
 
     const updatedData = {
-      vendorId: String(req.body.vendorId || "").trim(),
+      vendorId: vendor.vendorId,
       vendorName: String(req.body.vendorName || "").trim(),
       vendorStatus: req.body.vendorStatus === "OTHERS" && req.body.otherStatus
         ? `OTHERS - ${String(req.body.otherStatus).trim().toUpperCase().replace(/^(OTHERS - )+/, "")}`
@@ -2545,7 +2267,15 @@ router.post("/vendor/edit/:id", requireAuth, updateLimiter, async (req, res) => 
       return res.status(400).json({ success: false, message: "vendor already exist" });
     }
 
-    await Vendor.findByIdAndUpdate(req.params.id, updatedData, { runValidators: true });
+    const vf = verificationUpdate(req, vendor);
+    await Vendor.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: { ...updatedData, ...vf.set },
+        ...(Object.keys(vf.unset).length ? { $unset: vf.unset } : {}),
+      },
+      { runValidators: true },
+    );
 
     const vendorSnapshot = getVendorSnapshot(updatedData, updatedData);
     if (linkedVendorUsers.length) {
@@ -2566,7 +2296,7 @@ router.post("/vendor/edit/:id", requireAuth, updateLimiter, async (req, res) => 
 
     res.locals.auditDescription = `Updated vendor "${updatedData.vendorName}"`;
     req.flash("notification", "Vendor updated successfully!");
-    res.json({ success: true, redirect: "/app/vendor/view" });
+    res.json({ success: true, redirect: `/app/vendor/profile/${req.params.id}` });
   } catch (err) {
     console.error("VENDOR EDIT POST ERROR:", err);
     if (err?.code === 11000) {
@@ -2651,13 +2381,15 @@ router.post("/form/vendor-user", requireAuth, createLimiter, async (req, res) =>
       deliveryLocation1: primaryLocation.deliveryLocation1 || "",
       vendorPayment: primaryLocation.vendorPayment || "",
       vendorUserSignature,
+      // After ...req.body: the raw "verified=on" there isn't a Boolean.
+      ...verificationUpdate(req).set,
     });
 
     await Vendor.updateOne({ _id: vendor._id }, { $push: { users: newUser._id } });
 
     res.locals.auditDescription = `Created vendor coordinator "${userName}" for vendor "${vendor.vendorName}"`;
     req.flash("notification", "Vendor user created successfully!");
-    res.json({ success: true, redirect: "/app/form/vendor?tab=user" });
+    res.json({ success: true, redirect: "/app/vendor/coordinator/view" });
   } catch (err) {
     console.error(err);
     if (err?.code === 11000) {
@@ -2712,21 +2444,11 @@ router.get("/sales/order", async (req, res) => {
     logsPromise,
   ]);
 
-  let stockInfo = null;
-  if (orderToEdit?.tapeId?._id) {
-    try {
-      stockInfo = await getItemStockSummary(orderToEdit.onModel, orderToEdit.tapeId._id, orderToEdit._id);
-    } catch (err) {
-      console.error("EDIT ORDER STOCK SUMMARY ERROR:", err);
-    }
-  }
-
   res.render("inventory/orders/salesOrderForm.ejs", {
     clients,
     locations: (locations || []).filter(Boolean).sort(),
     labelStocks,
     orderToEdit,
-    stockInfo,
     logs,
     submissionToken,
     embed,
@@ -2741,26 +2463,13 @@ router.get("/sales/order", async (req, res) => {
 // API: Get clients filtered by item type (for smart filter)
 router.get("/sales/clients/:itemType", async (req, res) => {
   try {
-    const { itemType } = req.params;
-
-    // LABEL_STOCK (like the "no itemType" case) lists every client, not just
-    // ones with an existing LabelStockBinding: the Product Code picker on
-    // this same form lists the full master catalog and POST /sales/order
-    // auto-creates the binding on submit when one doesn't exist yet (see
-    // the labelStockMasterId fallback there), so a first-time client must
-    // still be selectable here. TAPE has no such fallback -- its items only
-    // ever come from an existing TapeBinding -- so it stays filtered.
-    if (itemType !== "TAPE") {
-      const clients = await Client.distinct("clientName");
-      return res.json(clients.sort());
-    }
-
-    const userIds = await TapeBinding.distinct("userId");
-    const users = await Username.find({ _id: { $in: userIds } })
-      .select("clientName")
-      .lean();
-    const clientNames = [...new Set(users.map((u) => u.clientName).filter(Boolean))].sort();
-    res.json(clientNames);
+    // Every client is listed, not just ones with an existing LabelStockBinding:
+    // the Product Code picker on this form lists the full master catalog and
+    // POST /sales/order auto-creates the binding on submit when one doesn't
+    // exist yet (the labelStockMasterId fallback), so a first-time client must
+    // still be selectable.
+    const clients = await Client.distinct("clientName");
+    res.json(clients.sort());
   } catch (err) {
     console.error("Sales clients filter error:", err);
     res.status(500).json([]);
@@ -2780,10 +2489,6 @@ router.get("/sales/items/:type/:userId", async (req, res) => {
 
     const user = await Username.findById(userId)
       .populate({
-        path: "tape",
-        populate: { path: "tapeId" },
-      })
-      .populate({
         path: "labelStock",
         populate: { path: "labelStock", model: "SachikoLabelStock" },
       })
@@ -2791,49 +2496,7 @@ router.get("/sales/items/:type/:userId", async (req, res) => {
 
     if (!user) return res.json([]);
 
-    if (type === "TAPE") {
-      const bindings = (user.tape || []).filter((b) => matchesLocation(b.location));
-      items = await Promise.all(
-        bindings.map(async (binding) => {
-          if (!binding.tapeId) return null;
-          if (binding.status === "INACTIVE") return null; // disabled binding: not orderable
-          const stockInfo = await getItemStockSummary("Tape", binding.tapeId._id);
-          const t = binding.tapeId;
-          return {
-            _id: binding._id,
-            location: binding.location || "",
-            displayName: `${t.tapePaperCode || ""} - ${t.tapeGsm || ""}gsm`,
-            minOrderQty: binding.tapeMinQty || 0,
-            rate: binding.tapeRatePerRoll || 0,
-            stock: stockInfo,
-            details: {
-              type: "TAPE",
-              productId: t.tapeProductId || "",
-              paperCode: t.tapePaperCode || "",
-              gsm: t.tapeGsm || "",
-              paperType: t.tapePaperType || "",
-              adhesiveGsm: t.tapeAdhesiveGsm || "",
-              finish: t.tapeFinish || "",
-              color: t.tapeColor || "",
-              width: t.tapeWidth || "",
-              mtrs: t.tapeMtrs || "",
-              coreId: t.tapeCoreId || "",
-              coreLength: t.tapeCoreLength || "",
-              notch: t.tapeNotch || "",
-              winding: t.tapeWinding || "",
-              clientPaperCode: binding.tapeClientPaperCode || "",
-              clientGsm: binding.clientTapeGsm || "",
-              deliveredMtrs: binding.tapeMtrsDel || "",
-              saleCost: binding.tapeSaleCost || 0,
-              minQty: t.tapeMinQty || 0,
-              orderQty: binding.tapeOdrQty || 0,
-              orderFreq: binding.tapeOdrFreq || "",
-              creditTerm: binding.tapeCreditTerm || "",
-            },
-          };
-        }),
-      );
-    } else if (type === "LABEL_STOCK") {
+    if (type === "LABEL_STOCK") {
       const bindings = (user.labelStock || []).filter((b) => matchesLocation(b.location));
       items = bindings.map((binding) => {
         if (!binding.labelStock) return null;
@@ -2953,13 +2616,8 @@ router.post("/sales/order", async (req, res) => {
       return res.json({ success: true, redirect: "/app/sales/pending" });
     }
 
-    if (["TAPE"].includes(itemType) && canonicalizeLocationName(locationRadio) === "ALL") {
-      return res.status(400).json({ success: false, message: "Location cannot be ALL. Please select a specific location." });
-    }
     let normalizedSourceLocation = canonicalizeLocationName(sourceLocation || locationRadio || userLocation);
-    const isStockBasedType = ["TAPE"].includes(itemType);
-
-    // "ALL" is not a valid storage location for stock-based orders.
+    // "ALL" is not a valid storage location.
     if (normalizedSourceLocation === "ALL") normalizedSourceLocation = "";
 
     // Fallback 1: derive from selected user.
@@ -2968,102 +2626,9 @@ router.post("/sales/order", async (req, res) => {
       normalizedSourceLocation = canonicalizeLocationName(userDoc?.userLocation);
     }
 
-    // Fallback 2: derive from binding -> user -> location.
-    if (!normalizedSourceLocation && isStockBasedType && itemId) {
-      let bindingUserId = null;
-
-      if (itemType === "TAPE") {
-        const binding = await TapeBinding.findById(itemId).select("userId").lean();
-        bindingUserId = binding?.userId || null;
-      }
-
-      if (bindingUserId) {
-        const userDoc = await Username.findById(bindingUserId).select("userLocation").lean();
-        normalizedSourceLocation = canonicalizeLocationName(userDoc?.userLocation);
-      }
-    }
-
-    if (isStockBasedType && (!normalizedSourceLocation || normalizedSourceLocation === "ALL")) {
-      return res.status(400).json({ success: false, message: "no location is selected" });
-    }
-
     const sourceLocationForSave = normalizedSourceLocation || undefined;
 
-    if (itemType === "TAPE") {
-      const binding = await TapeBinding.findById(itemId);
-      if (!binding) {
-        return res.status(400).json({ success: false, message: "Invalid item selected" });
-      }
-      if (!orderId && binding.status === "INACTIVE") {
-        return res.status(400).json({ success: false, message: "This item is disabled for the selected client and cannot be ordered." });
-      }
-      const parsedOrderRate = Number(orderRate);
-      const finalOrderRate = Number.isFinite(parsedOrderRate) ? parsedOrderRate : Number(binding.tapeRatePerRoll) || 0;
-
-      const data = {
-        tapeBinding: itemId,
-        userId: binding.userId,
-        tapeId: binding.tapeId,
-        sourceLocation: sourceLocationForSave, // Allow updating location if needed
-        poDate: poDate ? new Date(poDate) : undefined,
-        poNumber,
-        orderRate: finalOrderRate,
-        quantity: Number(quantity),
-        estimatedDate: new Date(estimatedDate),
-        remarks,
-        status: "PENDING",
-        onModel: "Tape",
-        onBindingModel: "TapeBinding",
-      };
-
-      if (orderId) {
-        // UPDATE existing order
-        await TapeSalesOrder.findByIdAndUpdate(orderId, data);
-        res.locals.auditDescription = await describeSalesOrder({
-          itemTypeLabel: "Tape", userId: binding.userId,
-          quantity: data.quantity, poNumber: data.poNumber, isUpdate: true,
-        });
-        req.flash("notification", "Sales order updated successfully!");
-        res.json({ success: true, redirect: "/app/sales/pending" });
-      } else {
-        // CREATE new order
-        data.createdBy = createdByUser;
-        data.orderSignature = buildSalesOrderSignature({
-          itemType,
-          itemId,
-          userId: binding.userId,
-          quantity: data.quantity,
-          estimatedDate,
-          poNumber,
-          sourceLocation: sourceLocationForSave,
-          orderRate: finalOrderRate,
-          createdBy: createdByUser,
-        });
-        data.submissionToken = String(submissionToken || "").trim() || undefined;
-        const existingOrder = await TapeSalesOrder.findOne({ orderSignature: data.orderSignature }).select("_id").lean();
-        if (existingOrder) {
-          return res.json({ success: true, redirect: "/app/sales/pending", duplicate: true });
-        }
-        const newOrder = await TapeSalesOrder.create(data);
-
-        // Action Log entry for creation
-        await SalesOrderLog.create({
-          orderId: newOrder._id,
-          action: "CREATED",
-          quantity: Number(quantity),
-          performedBy: createdByUser,
-        });
-
-        res.locals.auditDescription = await describeSalesOrder({
-          itemTypeLabel: "Tape", userId: binding.userId,
-          quantity: data.quantity, poNumber: data.poNumber, isUpdate: false,
-        });
-        req.flash("notification", "Sales order created successfully!");
-
-        // Redirect to pending orders
-        res.json({ success: true, redirect: "/app/sales/pending" });
-      }
-    } else if (itemType === "LABEL_STOCK") {
+    if (itemType === "LABEL_STOCK") {
       // Validated up front (rather than after binding resolution) so an
       // auto-created binding (below) never gets a blank paperSize/runningMeters.
       const trimmedPaperSize = String(paperSize || "").trim();
@@ -3262,65 +2827,19 @@ router.get("/sales/pending", async (req, res) => {
       .populate({ path: "userId", select: "clientName userName" })
       .populate({
         path: "tapeId",
-        // Widened beyond what the table itself needs so the "View" dialog's
-        // Fairtech-vs-Client comparison (mirrors /tape/compare/:id,
-        // minus the vendor column) has every spec field it displays.
-        // Mongoose ignores field names that don't exist on whichever model a
-        // given document's onModel actually resolves to, so Tape and
-        // SachikoLabelStock fields can share one select string safely.
-        select:
-          "tapeProductId tapePaperCode tapePaperType tapeGsm tapeWidth tapeMtrs tapeCoreId tapeFinish tapeAdhesiveGsm productCode skuCode rollOrSheet facestock adhesive releaseLiner",
+        select: "productCode skuCode rollOrSheet facestock adhesive releaseLiner",
       })
       .populate({
         path: "tapeBinding",
-        select:
-          "tapeClientPaperCode tapeRatePerRoll tapeOdrQty tapeOdrFreq tapeCreditTerm tapeSaleCost tapeMtrsDel tapeMinQty clientTapeGsm status location",
+        select: "status location",
       })
       .sort({ createdAt: 1 })
       .lean();
 
-    // Group pending orders by model type and itemId to fetch total stock.
-    // Only Tape has a stock model at all -- SL rows just get totalStock: 0
-    // below without ever touching TapeStock.
-    const itemIdsByModel = {
-      Tape: new Set(),
-    };
-
-    pendingOrders.forEach(o => {
-      if (o.onModel === "Tape" && o.tapeId) {
-        itemIdsByModel.Tape.add(o.tapeId?._id?.toString());
-      }
-    });
-
-    const stockMap = {}; // mapping: "onModel:itemId" -> totalStock
-
-    // Fetch stocks in parallel
-    const stockPromises = [
-      TapeStock.aggregate([
-        { $match: { tape: { $in: Array.from(itemIdsByModel.Tape).map(id => new mongoose.Types.ObjectId(id)) } } },
-        { $group: { _id: "$tape", total: { $sum: "$quantity" } } }
-      ]),
-    ];
-
-    const [tapeStocks] = await Promise.all(stockPromises);
-
-    tapeStocks.forEach(s => stockMap[`Tape:${s._id}`] = s.total);
-
-    // Fetch active Purchase Orders for these items
-    const allItemIds = Object.values(itemIdsByModel).flatMap(set => Array.from(set)).map(id => new mongoose.Types.ObjectId(id));
-    const activePOs = await PurchaseOrder.find({
-      status: { $in: ["PENDING", "CONFIRMED", "PARTIALLY_RECEIVED"] },
-      itemId: { $in: allItemIds }
-    }).select("itemId onModel").lean();
-
-    const poItemSet = new Set();
-    activePOs.forEach(po => poItemSet.add(`${po.onModel}:${po.itemId}`));
-
-    // Attach totalStock to each order
-    pendingOrders.forEach(o => {
-      const key = `${o.onModel}:${o.tapeId?._id}`;
-      o.totalStock = stockMap[key] || 0;
-      o.hasPendingPo = poItemSet.has(key);
+    // Label Stock rows have no stock model or purchase order of their own.
+    pendingOrders.forEach((o) => {
+      o.totalStock = 0;
+      o.hasPendingPo = false;
     });
 
     res.render("inventory/orders/pendingOrders.ejs", {
@@ -3718,9 +3237,7 @@ router.get("/purchase/pending", async (req, res) => {
       .populate("vendorUserId", "vendorName userName")
       .populate({
         path: "itemId",
-        select:
-          "tapeProductId tapePaperCode tapeGsm ttrProductId ttrType ttrWidth ttrMtrs" +
-          " skuId family type size gsm micron make vendorSkuCode color msq",
+        select: "skuId family type size gsm micron make vendorSkuCode color msq",
       })
       .sort({ createdAt: -1 })
       .lean();
@@ -3746,7 +3263,6 @@ router.get("/purchase/pending", async (req, res) => {
 
 function getItemName(item, type) {
   if (!item) return "N/A";
-  if (type === "Tape") return `${item.tapePaperCode || ""} ${item.tapeGsm || ""}gsm`.trim() || item.tapeProductId;
   if (MATERIAL_PO_TYPES[type]) return MATERIAL_PO_TYPES[type].name(item);
   return "N/A";
 }
@@ -3810,15 +3326,7 @@ router.post("/purchase/receive", async (req, res) => {
     const qty = Number(receivedQuantity) || po.quantity;
 
     // Create Stock Entry based on item type
-    if (po.onModel === "Tape") {
-      await TapeStock.create({
-        tape: po.itemId._id,
-        location,
-        quantity: qty,
-        remarks: remarks || `From PO: ${po.poNumber}`,
-        tapeFinish: po.itemId.tapeFinish || "MATTE"
-      });
-    } else if (po.onModel === "FacestockMaster") {
+    if (po.onModel === "FacestockMaster") {
       const item = po.itemId;
       const rollId = await generateMaterialRollId("FACESTOCK", FacestockStock);
       await FacestockStock.create({
@@ -4064,7 +3572,6 @@ router.put("/purchase/log/:logId", requireAuth, updateLimiter, async (req, res) 
           quantity: -deduction,
           remarks: `Receipt Log Edited (reduced): ${po.poNumber}`,
         };
-        if (po.onModel === "Tape") stockData.tapeFinish = po.itemId.tapeFinish;
         await StockModel.create(stockData);
 
         await StockLogModel.create({
@@ -4087,7 +3594,6 @@ router.put("/purchase/log/:logId", requireAuth, updateLimiter, async (req, res) 
           quantity: addition,
           remarks: `Receipt Log Edited (increased): ${po.poNumber}`,
         };
-        if (po.onModel === "Tape") stockData.tapeFinish = po.itemId.tapeFinish;
         await StockModel.create(stockData);
 
         await StockLogModel.create({
@@ -4164,7 +3670,6 @@ router.delete("/purchase/log/:logId", requireAuth, deleteLimiter, async (req, re
         quantity: -qtyToRemove,
         remarks: `Receipt Log Deleted (reversed): ${po.poNumber}`,
       };
-      if (po.onModel === "Tape") stockData.tapeFinish = po.itemId.tapeFinish;
       await StockModel.create(stockData);
 
       await StockLogModel.create({
@@ -4361,7 +3866,6 @@ router.post("/sales/order/status", requireAuth, updateLimiter, async (req, res) 
           quantity: -qty,
           remarks: `Sales Order Confirmed: ${orderId}`,
         };
-        if (order.onModel === "Tape") stockData.tapeFinish = tape.tapeFinish;
 
         await StockModel.create(stockData);
 
@@ -4463,7 +3967,6 @@ router.post("/sales/order/status", requireAuth, updateLimiter, async (req, res) 
           quantity: qtyToReverse,
           remarks: `Sales Order Cancelled (reversed): ${orderId}`,
         };
-        if (order.onModel === "Tape") stockData.tapeFinish = tape.tapeFinish;
 
         await StockModel.create(stockData);
 
@@ -4590,7 +4093,6 @@ router.put("/sales/order/log/:logId", requireAuth, updateLimiter, async (req, re
           quantity: -qtyDiff,
           remarks: `Log Edit (additional deduction): ${log.orderId}`,
         };
-        if (order.onModel === "Tape") stockData.tapeFinish = tape.tapeFinish;
 
         await StockModel.create(stockData);
 
@@ -4616,7 +4118,6 @@ router.put("/sales/order/log/:logId", requireAuth, updateLimiter, async (req, re
           quantity: reverseQty,
           remarks: `Log Edit (partial reversal): ${log.orderId}`,
         };
-        if (order.onModel === "Tape") stockData.tapeFinish = tape.tapeFinish;
 
         await StockModel.create(stockData);
 
@@ -4702,7 +4203,6 @@ router.delete("/sales/order/log/:logId", requireAuth, deleteLimiter, async (req,
         quantity: qty,
         remarks: `Log Deleted (reversed): ${log.orderId}`,
       };
-      if (order.onModel === "Tape") stockData.tapeFinish = tape.tapeFinish;
 
       await StockModel.create(stockData);
 
@@ -7703,460 +7203,6 @@ router.get("/audit/view", async (req, res) => {
   });
 });
 
-// ----------------------------------Block Master---------------------------------->
-// route for systemid form.
-router.get("/form/block", async (req, res) => {
-  let clients = await Client.distinct("clientName");
-  console.log(clients);
-  res.render("utilities/blockMaster.ejs", {
-    CSS: false,
-    title: "Block",
-    JS: false,
-    clients,
-    notification: req.flash("notification"),
-  });
-});
-
-// Route to handle systemid form submission.
-router.post("/form/block", requireAuth, createLimiter, async (req, res) => {
-  try {
-    let formData = req.body;
-    await Block.create(formData);
-    res.locals.auditDescription = `Created block "${formData.blockNo}"`;
-    req.flash("notification", "Block created successfully!");
-    res.json({ success: true, redirect: "/app/form/block" });
-  } catch (err) {
-    console.error(err);
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// ----------------------------------Die Master---------------------------------->
-
-/* ================= DIE ATTACHMENTS (JPG / DESIGN / LAYOUT) ================= */
-const DIE_UPLOAD_DIR = path.join(process.cwd(), "images", "dies");
-fs.mkdirSync(DIE_UPLOAD_DIR, { recursive: true });
-
-const DIE_FILE_RULES = {
-  dieJpgFile: { exts: [".jpg", ".jpeg"], label: "JPG" },
-  dieDesignFile: { exts: [".jpg", ".jpeg", ".pdf", ".cdr"], label: "Design" },
-  dieLayoutFile: { exts: [".jpg", ".jpeg", ".pdf", ".cdr"], label: "Layout" },
-};
-
-const dieStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, DIE_UPLOAD_DIR),
-  filename: (req, file, cb) =>
-    cb(null, crypto.randomBytes(16).toString("hex") + path.extname(file.originalname).toLowerCase()),
-});
-
-const dieFileFilter = (req, file, cb) => {
-  const rule = DIE_FILE_RULES[file.fieldname];
-  if (!rule) return cb(new Error("Invalid upload field"));
-  const ext = path.extname(file.originalname).toLowerCase();
-  if (!rule.exts.includes(ext)) {
-    return cb(new Error(`${rule.label} field accepts ${rule.exts.join(", ")} only`));
-  }
-  cb(null, true);
-};
-
-const dieUpload = multer({
-  storage: dieStorage,
-  fileFilter: dieFileFilter,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per file
-}).fields([
-  { name: "dieJpgFile", maxCount: 1 },
-  { name: "dieDesignFile", maxCount: 1 },
-  { name: "dieLayoutFile", maxCount: 1 },
-]);
-
-// Multer wrapper: turn upload errors into clean JSON responses.
-const handleDieUpload = (req, res, next) => {
-  dieUpload(req, res, (err) => {
-    if (err) {
-      const message =
-        err.code === "LIMIT_FILE_SIZE" ? "File too large (max 25MB)." : err.message || "File upload failed.";
-      return res.status(400).json({ success: false, message });
-    }
-    next();
-  });
-};
-
-// Remove any files multer already wrote (used when we bail out after upload).
-const cleanupDieUploads = (files = {}) => {
-  Object.values(files)
-    .flat()
-    .forEach((file) => {
-      if (file?.path) fs.promises.unlink(file.path).catch(() => {});
-    });
-};
-
-// Compress an uploaded JPG in place (resize + re-encode) to optimize storage.
-const optimizeDieJpg = async (filePath) => {
-  try {
-    const buffer = await sharp(filePath)
-      .rotate()
-      .resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 80, mozjpeg: true })
-      .toBuffer();
-    await fs.promises.writeFile(filePath, buffer);
-  } catch (err) {
-    console.error("DIE JPG OPTIMIZE ERROR:", err);
-  }
-};
-
-// Die lineage helpers: a "replace" (physically new tool, same spec) keeps the
-// base Die No but appends a " | <LETTER>" suffix (A, B, C...) so replacement
-// instances are distinguishable, while a "version" (spec revision) keeps the
-// Die No completely unchanged. rootDieNo strips any existing letter suffix so
-// replacing a replacement appends the next letter instead of stacking suffixes.
-const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const rootDieNo = (dieNo) => String(dieNo || "").replace(/ \| [A-Z]$/, "");
-async function nextReplaceLetter(root) {
-  const docs = await Die.find({ dieDieNo: { $regex: `^${escapeRegExp(root)}` } })
-    .select("dieDieNo")
-    .lean();
-  const re = new RegExp(`^${escapeRegExp(root)} \\| ([A-Z])$`);
-  let maxCode = 0;
-  for (const d of docs) {
-    const m = String(d.dieDieNo).match(re);
-    if (m) maxCode = Math.max(maxCode, m[1].charCodeAt(0) - 64);
-  }
-  return String.fromCharCode(65 + maxCode);
-}
-
-// Duplicate-prevention signature: identifies "the same physical die" purely
-// by spec, WITHOUT the generated Die No / version — otherwise two dies with
-// identical specs but different auto-generated numbers (the actual bug
-// reported: same spec re-entered as a brand-new Die No) would never match.
-// Because of that, an intentional "Replace"/"New Version" (which deliberately
-// keeps the same spec) DOES collide with its own lineage's signature — the
-// duplicate check below excludes the die's own lineage (see lineageDieIds)
-// so only a match OUTSIDE that lineage counts as a real duplicate.
-function normalizeDiePart(value) {
-  if (value === undefined || value === null) return "";
-  return String(value).trim().toUpperCase();
-}
-function normalizeDieList(value) {
-  const arr = Array.isArray(value) ? value : value ? [value] : [];
-  return arr.map((v) => normalizeDiePart(v)).filter(Boolean).sort().join(",");
-}
-function buildDieSignature(source) {
-  return [
-    normalizeDiePart(source.dieType),
-    normalizeDiePart(source.dieMake),
-    normalizeDiePart(source.dieBladType),
-    normalizeDieList(source.dieMachineNo),
-    normalizeDieList(source.dieFamily),
-    normalizeDiePart(source.dieTeeth),
-    normalizeDiePart(source.dieWidth),
-    normalizeDiePart(source.dieHeight),
-    normalizeDiePart(source.dieActualWidth),
-    normalizeDiePart(source.dieActualHeight),
-    normalizeDiePart(source.dieActualRepGap),
-    normalizeDiePart(source.dieFlatAcrossGap),
-    normalizeDiePart(source.dieFlatrepGap),
-    normalizeDiePart(source.dieFlatAcross),
-    normalizeDiePart(source.dieFlatDown),
-    normalizeDiePart(source.dieTotalUps),
-    normalizeDiePart(source.diePapType),
-    normalizeDiePart(source.dieOwnedBy),
-    normalizeDiePart(source.dieClientName),
-  ].join("||");
-}
-
-// Every die sharing the same root Die No (the original plus every "Replace"
-// letter-suffix instance, across all their versions) — excluded as a group
-// from the duplicate check so continuing that lineage never self-collides.
-async function lineageDieIds(dieDieNo) {
-  const root = rootDieNo(dieDieNo);
-  const docs = await Die.find({ dieDieNo: { $regex: `^${escapeRegExp(root)}(?:$| \\| [A-Z]$)` } })
-    .select("_id")
-    .lean();
-  return docs.map((d) => d._id);
-}
-
-// route for systemid form.
-router.get("/form/die", async (req, res) => {
-  const formatDieNo = (n) => `FS | DIE | ${String(n).padStart(4, "0")}`;
-  const parseDieSeq = (dieNo) => {
-    const match = String(dieNo || "").match(/^FS \| DIE \| (\d{4})$/);
-    return match ? Number(match[1]) : 0;
-  };
-  const [clients, latestDie, machines, dieVendors] = await Promise.all([
-    Client.distinct("clientName"),
-    Die.findOne({ dieDieNo: /^FS \| DIE \| \d{4}$/ }).sort({ dieDieNo: -1 }).select("dieDieNo").lean(),
-    Machine.find().sort({ machineName: 1 }).lean(),
-    Vendor.distinct("vendorName", { commodities: "DIE" }),
-  ]);
-  dieVendors.sort((a, b) => String(a).localeCompare(String(b)));
-  let nextSeq = parseDieSeq(latestDie?.dieDieNo) + 1;
-  while (await Die.exists({ dieDieNo: formatDieNo(nextSeq) })) nextSeq++;
-  const nextDieNo = formatDieNo(nextSeq);
-
-  // "Create New Version" flow: ?replaces=<dieId> pre-fills the form with the
-  // damaged die's specs so only the Die No / Machine No etc. need re-entry.
-  let replacesDie = null;
-  let versionDieNo = null;
-  let nextVersionNumber = null;
-  let replaceDieNo = null;
-  if (req.query.replaces && mongoose.isValidObjectId(req.query.replaces)) {
-    replacesDie = await Die.findById(req.query.replaces).lean();
-    if (replacesDie) {
-      versionDieNo = replacesDie.dieDieNo;
-      nextVersionNumber = (Number(replacesDie.dieVersion) || 1) + 1;
-      const replaceRoot = rootDieNo(replacesDie.dieDieNo);
-      replaceDieNo = `${replaceRoot} | ${await nextReplaceLetter(replaceRoot)}`;
-    }
-  }
-
-  res.render("utilities/dieMaster.ejs", {
-    CSS: "tabOpt.css",
-    title: "Die",
-    JS: "clientForm.js",
-    clients,
-    nextDieNo,
-    machines,
-    dieVendors,
-    replacesDie,
-    versionDieNo,
-    nextVersionNumber,
-    replaceDieNo,
-    notification: req.flash("notification"),
-  });
-});
-
-// Route to handle systemid form submission.
-router.post("/form/die", requireAuth, createLimiter, handleDieUpload, async (req, res) => {
-  try {
-    const files = req.files || {};
-    const dieJpgFile = files.dieJpgFile?.[0]?.filename;
-    const dieDesignFile = files.dieDesignFile?.[0]?.filename;
-    const dieLayoutFile = files.dieLayoutFile?.[0]?.filename;
-
-    if (dieJpgFile) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieJpgFile));
-    if (dieDesignFile && /\.(jpg|jpeg)$/i.test(dieDesignFile)) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieDesignFile));
-    if (dieLayoutFile && /\.(jpg|jpeg)$/i.test(dieLayoutFile)) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieLayoutFile));
-
-    const { replacesDieId, versionMode, ...body } = req.body;
-    let replacesDie = null;
-    if (replacesDieId) {
-      if (!mongoose.isValidObjectId(replacesDieId)) {
-        cleanupDieUploads(req.files);
-        return res.status(400).json({ success: false, message: "Invalid die being replaced" });
-      }
-      replacesDie = await Die.findById(replacesDieId).lean();
-      if (!replacesDie) {
-        cleanupDieUploads(req.files);
-        return res.status(400).json({ success: false, message: "The die being replaced was not found" });
-      }
-    }
-
-    // Die No / dieVersion are never trusted from the client when replacing —
-    // recomputed here (fresh, not the GET-time preview) to stay authoritative
-    // and avoid a stale letter if two replacements are created concurrently.
-    let dieDieNo = body.dieDieNo;
-    let dieVersion = 1;
-    const isReplace = replacesDie && versionMode === "replace";
-    if (replacesDie) {
-      if (isReplace) {
-        const root = rootDieNo(replacesDie.dieDieNo);
-        dieDieNo = `${root} | ${await nextReplaceLetter(root)}`;
-        dieVersion = Number(replacesDie.dieVersion) || 1; // replace leaves version untouched
-      } else {
-        dieDieNo = replacesDie.dieDieNo; // version: Die No stays identical
-        dieVersion = (Number(replacesDie.dieVersion) || 1) + 1;
-      }
-    }
-
-    const dieSignature = hashSignature(buildDieSignature(body));
-    const excludeIds = await lineageDieIds(dieDieNo);
-    const duplicateDie = await Die.findOne({ dieSignature, _id: { $nin: excludeIds } })
-      .select("dieDieNo")
-      .lean();
-    if (duplicateDie) {
-      cleanupDieUploads(req.files);
-      return res.status(400).json({ success: false, message: duplicateMasterMessage("Die", duplicateDie.dieDieNo) });
-    }
-
-    const created = await Die.create({
-      ...body,
-      dieDieNo,
-      dieJpgFile,
-      dieDesignFile,
-      dieLayoutFile,
-      replacesDieId: replacesDie ? replacesDie._id : undefined,
-      dieVersion,
-      dieSignature,
-    });
-
-    // The superseded die is taken out of active rotation.
-    if (replacesDie) {
-      await Die.findByIdAndUpdate(replacesDie._id, { $set: { dieStatus: "INACTIVE" } });
-    }
-
-    res.locals.auditDescription = replacesDie
-      ? isReplace
-        ? `Created die "${created.dieDieNo}" replacing "${replacesDie.dieDieNo}"`
-        : `Created die "${created.dieDieNo}" (V${dieVersion}) as a new version of "${replacesDie.dieDieNo}"`
-      : `Created die "${created.dieDieNo}" for "${req.body.dieClientName || "N/A"}"`;
-    req.flash("notification", "Die created successfully!");
-    res.json({ success: true, redirect: "/app/die/view" });
-  } catch (err) {
-    cleanupDieUploads(req.files);
-    console.error(err);
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-router.get("/die/view", async (req, res) => {
-  const jsonData = await Die.find().sort({ dieDieNo: 1 }).lean();
-  res.render("utilities/dieMasterDisp.ejs", {
-    CSS: "tableDisp.css",
-    JS: false,
-    title: "Die Master",
-    jsonData,
-    notification: req.flash("notification"),
-  });
-});
-
-router.get("/die/profile/:id", async (req, res) => {
-  const die = await Die.findById(req.params.id).lean();
-  if (!die) {
-    req.flash("notification", "Die not found");
-    return res.redirect("/app/die/view");
-  }
-  const [replacedDie, replacedByDie] = await Promise.all([
-    die.replacesDieId ? Die.findById(die.replacesDieId).select("dieDieNo dieVersion").lean() : null,
-    Die.findOne({ replacesDieId: die._id }).select("dieDieNo dieVersion").lean(),
-  ]);
-  res.render("utilities/dieProfile.ejs", {
-    CSS: false,
-    JS: false,
-    title: "Die Profile",
-    die,
-    replacedDie,
-    replacedByDie,
-    notification: req.flash("notification"),
-  });
-});
-
-// Edit a die (reuses the create form in edit mode).
-router.get("/die/edit/:id", async (req, res) => {
-  const [die, clients, machines, dieVendors] = await Promise.all([
-    Die.findById(req.params.id).lean(),
-    Client.distinct("clientName"),
-    Machine.find().sort({ machineName: 1 }).lean(),
-    Vendor.distinct("vendorName", { commodities: "DIE" }),
-  ]);
-  if (!die) {
-    req.flash("notification", "Die not found");
-    return res.redirect("/app/die/view");
-  }
-  dieVendors.sort((a, b) => String(a).localeCompare(String(b)));
-  res.render("utilities/dieMaster.ejs", {
-    CSS: "tabOpt.css",
-    title: "Edit Die",
-    JS: "clientForm.js",
-    clients,
-    die,
-    machines,
-    dieVendors,
-    notification: req.flash("notification"),
-  });
-});
-
-router.post("/die/edit/:id", requireAuth, updateLimiter, handleDieUpload, async (req, res) => {
-  try {
-    const files = req.files || {};
-    const dieJpgFile = files.dieJpgFile?.[0]?.filename;
-    const dieDesignFile = files.dieDesignFile?.[0]?.filename;
-    const dieLayoutFile = files.dieLayoutFile?.[0]?.filename;
-
-    if (dieJpgFile) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieJpgFile));
-    if (dieDesignFile && /\.(jpg|jpeg)$/i.test(dieDesignFile)) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieDesignFile));
-    if (dieLayoutFile && /\.(jpg|jpeg)$/i.test(dieLayoutFile)) await optimizeDieJpg(path.join(DIE_UPLOAD_DIR, dieLayoutFile));
-
-    const currentDie = await Die.findById(req.params.id)
-      .select("dieJpgFile dieDesignFile dieLayoutFile dieVersion dieDieNo")
-      .lean();
-    if (!currentDie) {
-      cleanupDieUploads(req.files);
-      return res.status(404).json({ success: false, message: "Die not found" });
-    }
-
-    const update = { ...req.body };
-    // Version lineage is set once at creation (via the "New Version" flow) and
-    // must not be alterable through a plain edit.
-    delete update.replacesDieId;
-    delete update.dieVersion;
-    if (dieJpgFile) update.dieJpgFile = dieJpgFile;
-    if (dieDesignFile) update.dieDesignFile = dieDesignFile;
-    if (dieLayoutFile) update.dieLayoutFile = dieLayoutFile;
-
-    const dieSignature = hashSignature(buildDieSignature(update));
-    const excludeIds = await lineageDieIds(currentDie.dieDieNo);
-    const duplicateDie = await Die.findOne({ dieSignature, _id: { $nin: excludeIds } })
-      .select("dieDieNo")
-      .lean();
-    if (duplicateDie) {
-      cleanupDieUploads(req.files);
-      return res.status(400).json({ success: false, message: duplicateMasterMessage("Die", duplicateDie.dieDieNo) });
-    }
-    update.dieSignature = dieSignature;
-
-    const updated = await Die.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
-    if (!updated) {
-      cleanupDieUploads(req.files);
-      return res.status(404).json({ success: false, message: "Die not found" });
-    }
-
-    // Replaced files are no longer referenced by any document — clean them up.
-    if (dieJpgFile && currentDie.dieJpgFile) {
-      fs.promises.unlink(path.join(DIE_UPLOAD_DIR, currentDie.dieJpgFile)).catch(() => {});
-    }
-    if (dieDesignFile && currentDie.dieDesignFile) {
-      fs.promises.unlink(path.join(DIE_UPLOAD_DIR, currentDie.dieDesignFile)).catch(() => {});
-    }
-    if (dieLayoutFile && currentDie.dieLayoutFile) {
-      fs.promises.unlink(path.join(DIE_UPLOAD_DIR, currentDie.dieLayoutFile)).catch(() => {});
-    }
-
-    res.locals.auditDescription = `Updated die "${updated.dieDieNo}"`;
-    req.flash("notification", "Die updated successfully!");
-    res.json({ success: true, redirect: `/app/die/profile/${req.params.id}` });
-  } catch (err) {
-    cleanupDieUploads(req.files);
-    console.error("DIE EDIT ERROR:", err);
-    res.status(400).json({ success: false, message: err.message });
-  }
-});
-
-// GET: Serve a die attachment (jpg inline; design inline for image/pdf, download otherwise).
-router.get("/die/file/:id/:type", async (req, res) => {
-  try {
-    const { id, type } = req.params;
-    const fieldByType = { jpg: "dieJpgFile", design: "dieDesignFile", layout: "dieLayoutFile" };
-    const field = fieldByType[type];
-    if (!field || !mongoose.Types.ObjectId.isValid(id)) return res.status(400).send("Invalid request");
-
-    const die = await Die.findById(id).select(`dieDieNo ${field}`).lean();
-    const stored = die?.[field];
-    if (!die || !stored) return res.status(404).send("File not found");
-
-    const filePath = path.join(DIE_UPLOAD_DIR, path.basename(stored));
-    if (!fs.existsSync(filePath)) return res.status(404).send("File not found");
-
-    const ext = path.extname(stored).replace(".", "").toLowerCase() || "jpg";
-    const downloadName = `${String(die.dieDieNo || "die").replace(/[^\w.-]+/g, "_")}_${type}.${ext}`;
-    const disposition = ["jpg", "jpeg", "pdf"].includes(ext) ? "inline" : "attachment";
-    res.setHeader("Content-Disposition", `${disposition}; filename="${downloadName}"`);
-    res.sendFile(filePath);
-  } catch (err) {
-    console.error("DIE FILE SERVE ERROR:", err);
-    res.status(500).send("Failed to serve file");
-  }
-});
-
 // ---------------------------------------------------------------------------------------------------->>>>>
 
 // ----------------------------------client display---------------------------------->
@@ -8216,13 +7262,15 @@ router.get("/master/view", async (req, res) => {
 // ----------------------------------Vendor display----------------------------------
 router.get("/vendor/view", async (req, res) => {
   try {
-    const [jsonData, userCounts] = await Promise.all([
+    const [jsonData, userCounts, previewVendorId] = await Promise.all([
       Vendor.find()
-        .select("vendorId vendorName vendorStatus hoLocation warehouseLocation commodities vendorGst vendorMsme vendorGumasta vendorPan users")
+        .select("vendorId vendorName vendorStatus hoLocation warehouseLocation commodities vendorGst vendorMsme vendorGumasta vendorPan users verified verifiedBy verifiedAt")
         .populate({ path: "users", select: "_id" })
         .sort({ vendorName: 1 })
         .lean(),
       VendorUser.aggregate([{ $group: { _id: "$vendorId", count: { $sum: 1 } } }]),
+      // For the New Vendor dialog (views/users/_vendorDialog.ejs).
+      getNextVendorIdPreview(),
     ]);
 
     const userCountByVendorId = new Map(
@@ -8235,6 +7283,7 @@ router.get("/vendor/view", async (req, res) => {
 
     res.render("users/vendorsView.ejs", {
       jsonData,
+      previewVendorId,
       CSS: "tableDisp.css",
       JS: false,
       title: "Vendor Details",
@@ -8243,7 +7292,7 @@ router.get("/vendor/view", async (req, res) => {
   } catch (err) {
     console.error("VENDOR VIEW ERROR:", err);
     req.flash("notification", "Failed to load vendor details");
-    res.redirect("/app/form/vendor");
+    res.redirect("back");
   }
 });
 
@@ -8480,8 +7529,12 @@ router.get("/vendor/coordinator/view", async (req, res) => {
       row.tapeCount = row.tape?.length || 0;
     });
 
+    // For the New Coordinator dialog (views/users/_vendorUserDialog.ejs).
+    const vendors = await Vendor.distinct("vendorName");
+
     res.render("users/vendorUserView.ejs", {
       jsonData,
+      vendors: vendors.filter(Boolean).sort(),
       CSS: "tableDisp.css",
       JS: false,
       title: "Vendor Coordinator View",
@@ -8490,11 +7543,42 @@ router.get("/vendor/coordinator/view", async (req, res) => {
   } catch (err) {
     console.error("VENDOR COORDINATOR VIEW ERROR:", err);
     req.flash("notification", "Failed to load vendor coordinator view");
-    res.redirect("/app/form/vendor");
+    res.redirect("back");
   }
 });
 
 // ----------------------------------Vendor coordinator details----------------------------------
+// The location rows the Edit Coordinator dialog starts from. Pick up details
+// are per-location; for legacy coordinators whose stored locationDetails
+// predate that, backfill the primary (first) location's pick up details from
+// the top-level fields so editing doesn't wipe the existing pick up info.
+function vendorUserEditRows(user) {
+  const stored = Array.isArray(user.locationDetails) && user.locationDetails.length
+    ? user.locationDetails.map((row) => ({ ...row }))
+    : [{ userLocation: user.userLocation || "", dispatchAddress: user.dispatchAddress || "" }];
+
+  const hasPrimaryDispatch = stored[0] && (
+    stored[0].selfDispatch || stored[0].transportName || stored[0].transportContact ||
+    stored[0].dropLocation || stored[0].dropLocation1 || stored[0].deliveryMode ||
+    stored[0].deliveryLocation || stored[0].deliveryLocation1 || stored[0].vendorPayment
+  );
+  if (stored[0] && !hasPrimaryDispatch) {
+    stored[0] = {
+      ...stored[0],
+      selfDispatch: user.SelfDispatch || "",
+      transportName: user.transportName || "",
+      transportContact: user.transportContact || "",
+      dropLocation: user.dropLocation || "",
+      dropLocation1: user.dropLocation1 || "",
+      deliveryMode: user.deliveryMode || "",
+      deliveryLocation: user.deliveryLocation || "",
+      deliveryLocation1: user.deliveryLocation1 || "",
+      vendorPayment: user.vendorPayment || "",
+    };
+  }
+  return stored;
+}
+
 router.get("/vendor/coordinator/details/:userId", async (req, res) => {
   try {
     const vendorUser = await VendorUser.findById(req.params.userId).lean();
@@ -8512,6 +7596,7 @@ router.get("/vendor/coordinator/details/:userId", async (req, res) => {
       JS: false,
       vendorUser,
       vendor,
+      initialLocationDetails: vendorUserEditRows(vendorUser),
       notification: req.flash("notification"),
     });
   } catch (err) {
@@ -8599,58 +7684,10 @@ router.post("/vendor/coordinator/details/:userId/status", requireAuth, updateLim
 });
 
 // ----------------------------------Vendor coordinator edit----------------------------------
-router.get("/form/edit/vendor-user/:userId", async (req, res) => {
-  try {
-    const user = await VendorUser.findById(req.params.userId).lean();
-    if (!user) {
-      req.flash("notification", "Vendor coordinator not found");
-      return res.redirect("/app/vendor/coordinator/view");
-    }
-
-    const vendor = await Vendor.findOne({ vendorId: user.vendorId }).lean();
-
-    // Build the rows for the form. Pick up details are now per-location; for
-    // legacy coordinators whose stored locationDetails predate that, backfill the
-    // primary (first) location's pick up details from the top-level fields so
-    // editing doesn't wipe the existing pick up info.
-    const stored = Array.isArray(user.locationDetails) && user.locationDetails.length
-      ? user.locationDetails
-      : [{ userLocation: user.userLocation || "", dispatchAddress: user.dispatchAddress || "" }];
-
-    const hasPrimaryDispatch = stored[0] && (
-      stored[0].selfDispatch || stored[0].transportName || stored[0].transportContact ||
-      stored[0].dropLocation || stored[0].dropLocation1 || stored[0].deliveryMode ||
-      stored[0].deliveryLocation || stored[0].deliveryLocation1 || stored[0].vendorPayment
-    );
-    if (stored[0] && !hasPrimaryDispatch) {
-      stored[0] = {
-        ...stored[0],
-        selfDispatch: user.SelfDispatch || "",
-        transportName: user.transportName || "",
-        transportContact: user.transportContact || "",
-        dropLocation: user.dropLocation || "",
-        dropLocation1: user.dropLocation1 || "",
-        deliveryMode: user.deliveryMode || "",
-        deliveryLocation: user.deliveryLocation || "",
-        deliveryLocation1: user.deliveryLocation1 || "",
-        vendorPayment: user.vendorPayment || "",
-      };
-    }
-
-    res.render("users/editVendorUser.ejs", {
-      title: "Edit Vendor Coordinator",
-      CSS: "tabOpt.css",
-      JS: false,
-      user,
-      vendor,
-      initialLocationDetails: stored,
-      notification: req.flash("notification"),
-    });
-  } catch (err) {
-    console.error("VENDOR COORDINATOR EDIT GET ERROR:", err);
-    req.flash("notification", "Failed to load vendor coordinator edit page");
-    res.redirect("/app/vendor/coordinator/view");
-  }
+// Edit Coordinator is a dialog on the coordinator's details page
+// (views/users/_editVendorUserDialog.ejs); old links forward there and open it.
+router.get("/form/edit/vendor-user/:userId", (req, res) => {
+  res.redirect(`/app/vendor/coordinator/details/${encodeURIComponent(req.params.userId)}?edit=1`);
 });
 
 router.post("/form/edit/vendor-user/:userId", requireAuth, updateLimiter, async (req, res) => {
@@ -8738,7 +7775,12 @@ router.post("/form/edit/vendor-user/:userId", requireAuth, updateLimiter, async 
       });
     }
 
-    await VendorUser.findByIdAndUpdate(userId, updatedData, { runValidators: true });
+    const vf = verificationUpdate(req, user);
+    await VendorUser.findByIdAndUpdate(
+      userId,
+      { $set: { ...updatedData, ...vf.set }, ...(Object.keys(vf.unset).length ? { $unset: vf.unset } : {}) },
+      { runValidators: true },
+    );
     res.locals.auditDescription = `Updated vendor coordinator "${userName}"`;
     req.flash("notification", "Vendor coordinator updated successfully!");
     return res.json({ success: true, redirect: `/app/vendor/coordinator/details/${userId}` });

@@ -79,6 +79,8 @@
     border-radius: 6px;
     transition: background 0.2s;
     white-space: nowrap;
+    border: none;
+    cursor: pointer;
   }
 
   .edit-btn:hover { background: #f1f5f9; }
@@ -429,7 +431,7 @@
   <div class="profile-header-card">
     <div class="header-top">
       <div class="header-info">
-        <h1><%= vendor.vendorName %></h1>
+        <h1 style="display:inline-flex;align-items:center;gap:8px;"><%= vendor.vendorName %><span id="vendor-verified-badge"></span></h1>
         <div class="header-badges">
           <span class="badge badge-status <%= vendor.vendorStatus !== 'ACTIVE' ? 'status-inactive' : '' %>">
             <%= vendor.vendorStatus %>
@@ -439,9 +441,9 @@
           <% }) %>
         </div>
       </div>
-      <a href="/app/vendor/edit/<%= vendor._id %>" class="edit-btn">
+      <button type="button" class="edit-btn" onclick="openEditVendorDialog()">
         <i class="fa-solid fa-pen"></i> Edit Details
-      </a>
+      </button>
     </div>
 
     <div class="info-section">
@@ -485,7 +487,7 @@
       </h2>
       <button
         class="header-action-btn"
-        onclick="window.location.href='/app/form/vendor?tab=user&vendorName=<%= encodeURIComponent(vendor.vendorName) %>'"
+        onclick="window.location.href='/app/vendor/coordinator/view?new=coordinator&vendorName=<%= encodeURIComponent(vendor.vendorName) %>'"
       >
         <i class="fa-solid fa-plus"></i> Add Coordinator
       </button>
@@ -665,3 +667,16 @@
     });
   });
 </script>
+
+<script src="/js/verification.js"></script>
+<script type="application/json" id="vendor-verified-data"><%- safeJson({ verified: !!vendor.verified, verifiedBy: vendor.verifiedBy || "", verifiedAt: vendor.verifiedAt || null }) %></script>
+<script>
+  (function () {
+    const v = JSON.parse(document.getElementById("vendor-verified-data").textContent);
+    document.getElementById("vendor-verified-badge").innerHTML = verifiedBadgeFor(v, 24);
+  })();
+</script>
+
+<!-- Edit Vendor dialog (opened by "Edit Details" above) -->
+<link href="/css/soDialog.css?v=2" rel="stylesheet" />
+<%- include('./_editVendorDialog', { vendor }) %>

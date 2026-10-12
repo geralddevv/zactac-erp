@@ -63,6 +63,60 @@
     .status-choices[data-value="PENDING"] .choices__inner { border-color: #f0ad4e !important; }
     .status-choices[data-value="IN_PROGRESS"] .choices__inner { border-color: #044a78 !important; }
     .status-choices[data-value="COMPLETED"] .choices__inner { border-color: #28a745 !important; }
+
+    /* Whose tasks am I looking at. Server-side scope (see GET /tasks) — these
+       are plain links, so the chosen view survives a reload and can be shared. */
+    /* Sits on the blue .indi-head, so it is a frosted track with a white "thumb"
+       on the active segment rather than a grey slab. */
+    .scope-switch {
+      display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+    }
+    .scope-switch a {
+      padding: 5px 16px; font-size: 13px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+      color: rgba(255, 255, 255, 0.82); text-decoration: none; border-radius: 999px;
+      display: flex; align-items: center; gap: 7px;
+      transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+    }
+    .scope-switch a:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+    .scope-switch a:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+    .scope-switch a.active {
+      background: #fff; color: #044a78;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    .scope-count {
+      font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22); color: #fff;
+    }
+    .scope-count:empty { display: none; }
+    .scope-switch a.active .scope-count { background: #e6f0f7; color: #044a78; }
+    .scope-count.overdue { background: #dc3545; color: #fff; }
+    .scope-switch a.active .scope-count.overdue { background: #fde8ea; color: #b4232f; }
+
+    /* Send-to-employee vs keep-for-myself, in the New Task dialog. */
+    .mode-switch { display: flex; gap: 8px; }
+    .mode-btn {
+      flex: 1; min-width: 0; padding: 9px 10px; font-size: 13px; font-weight: 600;
+      color: #475569; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 10px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+      transition: all 0.15s;
+    }
+    .mode-btn:hover:not(:disabled) { border-color: #94a3b8; }
+    .mode-btn.is-active { background: #044a78; border-color: #044a78; color: #fff; }
+    .mode-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .mode-hint { font-size: 12px; color: #64748b; margin-top: 7px; line-height: 1.35; }
+
+    /* A row opened from a notification link (?open=<id>) — long enough to
+       find by eye, then it stops drawing attention to itself. */
+    @keyframes rowFlash {
+      0%, 100% { background-color: transparent; }
+      25%, 75% { background-color: #fff3cd; }
+    }
+    .tabulator-row.row-flash { animation: rowFlash 1.2s ease-in-out 3; }
+    @media (prefers-reduced-motion: reduce) {
+      .tabulator-row.row-flash { animation: none; background-color: #fff3cd; }
+    }
   </style>
 
   <div class="indi-head">
@@ -70,7 +124,18 @@
       Company Tasks
       <span id="viewLabel" style="font-weight: 400; font-size: 0.9rem; opacity: 0.85;">&nbsp;— Open</span>
     </h1>
-    <div style="display: flex; gap: 10px; align-items: center">
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+      <div class="scope-switch" role="group" aria-label="Whose tasks">
+        <a href="/app/tasks?scope=mine" class="<%= scope === 'mine' ? 'active' : '' %>">
+          Assigned to me <span class="scope-count" id="mineCount"></span>
+        </a>
+        <a href="/app/tasks?scope=created" class="<%= scope === 'created' ? 'active' : '' %>">Created by me</a>
+        <%# "All" is a role power (proprietor/admin/hod) — and the server
+            enforces it: asking for ?scope=all without the role falls back. %>
+        <% if (canSeeAllTasks) { %>
+        <a href="/app/tasks?scope=all" class="<%= scope === 'all' ? 'active' : '' %>">All</a>
+        <% } %>
+      </div>
       <!-- Same split as the Daybook: completed tasks stay in the list but sit
            behind this toggle. Both pages read the one Task.status, so a task
            completed on either page lands in the Completed view on both. -->
@@ -100,11 +165,27 @@
       <button class="dialog-close-btn" type="button" onclick="closeAddDialog()" aria-label="Close">×</button>
     </div>
     <div class="dialog-body">
+      <!-- Who the task is for comes first: it decides what the rest of the
+           form means. "Keep for myself" makes it the creator's own task, so
+           the Assigned Employee field below has nothing to say and is hidden,
+           and nobody is notified. -->
+      <div class="dialog-field-group">
+        <label class="dialog-field-label">Who is this for?</label>
+        <div class="mode-switch" id="addModeSwitch" role="group" aria-label="Who is this task for">
+          <button type="button" class="mode-btn is-active" data-mode="send" aria-pressed="true">
+            <i class="fa-solid fa-paper-plane"></i> Send to employee
+          </button>
+          <button type="button" class="mode-btn" data-mode="self" aria-pressed="false">
+            <i class="fa-regular fa-bell"></i> Keep for myself
+          </button>
+        </div>
+        <div class="mode-hint" id="addModeHint"></div>
+      </div>
       <div class="dialog-field-group">
         <label class="dialog-field-label" for="addDueDateInput">Date</label>
         <input type="date" id="addDueDateInput" class="form-control premium-input" />
       </div>
-      <div class="dialog-field-group dialog-choices">
+      <div class="dialog-field-group dialog-choices" id="addEmployeeGroup">
         <label class="dialog-field-label" for="addEmployeeSelect">Assigned Employee</label>
         <select id="addEmployeeSelect"><option value="">Select Employee</option></select>
       </div>
@@ -218,6 +299,7 @@
 </div>
 
 <script id="tasks-data" type="application/json"><%- safeJson(tasks) %></script>
+<script id="page-config" type="application/json"><%- safeJson({ scope, canSeeAllTasks, openTaskId, hasEmployeeIdentity }) %></script>
 <script id="employees-data" type="application/json"><%- safeJson(employees) %></script>
 <script id="clients-data" type="application/json"><%- safeJson(clients) %></script>
 <script id="daybook-task-ids-data" type="application/json"><%- safeJson(daybookTaskIds) %></script>
@@ -227,6 +309,7 @@
   const clientsData   = JSON.parse(document.getElementById("clients-data").textContent);
   const rawTasks      = JSON.parse(document.getElementById("tasks-data").textContent);
   const daybookTaskIds = new Set(JSON.parse(document.getElementById("daybook-task-ids-data").textContent));
+  const pageConfig    = JSON.parse(document.getElementById("page-config").textContent);
 
   const STATUS_LABELS = { PENDING: "Pending", IN_PROGRESS: "In Progress", COMPLETED: "Completed" };
   const STATUS_COLORS = { PENDING: "#f0ad4e", IN_PROGRESS: "#044a78", COMPLETED: "#28a745" };
@@ -251,6 +334,15 @@
     status:       t.status || "PENDING",
     dueDate:      t.dueDate || "",
     inDaybook:    daybookTaskIds.has(String(t._id)),
+    // What this user may do with the row, decided server-side (taskPermissions
+    // in routes/fairdesk_route.js). Hiding a button is only tidiness — the
+    // same facts are checked again by every PUT and DELETE.
+    canEdit:      Boolean(t.perms?.canEdit),
+    canDelete:    Boolean(t.perms?.canDelete),
+    canSetStatus: Boolean(t.perms?.canSetStatus),
+    isCreator:    Boolean(t.perms?.isCreator),
+    isMine:       Boolean(t.perms?.isAssignee),
+    createdByName: t.createdByName || "",
   }));
 
   // Completed work is kept, not hidden -- it moves behind the header toggle so
@@ -290,7 +382,11 @@
     height:           "100%",
     responsiveLayout: false,
     movableColumns:   true,
-    placeholder:      "No tasks yet.",
+    placeholder:      pageConfig.scope === "mine"
+                        ? (pageConfig.hasEmployeeIdentity
+                            ? "Nothing is assigned to you."
+                            : "This login isn't tied to an employee record, so nothing can be assigned to it.")
+                        : pageConfig.scope === "created" ? "You haven't created any tasks yet." : "No tasks yet.",
     columns: [
       // getPosition(true) is the row's rank among currently sorted/filtered
       // rows, re-evaluated on every redraw -- stays correct after sorting or
@@ -304,17 +400,23 @@
           const wrap = document.createElement("div");
           wrap.style.cssText = "display:flex;gap:5px;justify-content:center;";
 
-          const completeBtn = document.createElement("button");
-          completeBtn.className = "row-btn";
-          completeBtn.style.background = t.status === "COMPLETED" ? "#94a3b8" : "#28a745";
-          completeBtn.title = t.status === "COMPLETED" ? "Reopen task" : "Mark complete";
-          completeBtn.innerHTML = t.status === "COMPLETED" ? '<i class="fa-solid fa-rotate-left"></i>' : '<i class="fa-solid fa-check"></i>';
-          completeBtn.addEventListener("click", () => toggleComplete(cell.getRow(), completeBtn));
+          // The assignee progresses the work (status), the creator owns the
+          // task itself (edit, delete) — so the row only offers what this
+          // person is allowed to do with it.
+          let completeBtn = null;
+          if (t.canSetStatus) {
+            completeBtn = document.createElement("button");
+            completeBtn.className = "row-btn";
+            completeBtn.style.background = t.status === "COMPLETED" ? "#94a3b8" : "#28a745";
+            completeBtn.title = t.status === "COMPLETED" ? "Reopen task" : "Mark complete";
+            completeBtn.innerHTML = t.status === "COMPLETED" ? '<i class="fa-solid fa-rotate-left"></i>' : '<i class="fa-solid fa-check"></i>';
+            completeBtn.addEventListener("click", () => toggleComplete(cell.getRow(), completeBtn));
+          }
 
           // Completed work is a record, not a worklist: undo is the only thing
           // worth offering. Reopen it and the full set of actions comes back.
           if (t.status === "COMPLETED") {
-            wrap.appendChild(completeBtn);
+            if (completeBtn) wrap.appendChild(completeBtn);
             return wrap;
           }
 
@@ -323,24 +425,29 @@
           paintDaybookBtn(daybookBtn, t.inDaybook);
           daybookBtn.addEventListener("click", () => toggleDaybook(cell.getRow(), daybookBtn));
 
-          const editBtn = document.createElement("button");
-          editBtn.className = "row-btn";
-          editBtn.style.background = "#e67e22";
-          editBtn.title = "Edit";
-          editBtn.innerHTML = '<i class="fa-solid fa-pen-to-square"></i>';
-          editBtn.addEventListener("click", () => openEditDialog(cell.getRow()));
-
-          const delBtn = document.createElement("button");
-          delBtn.className = "row-btn";
-          delBtn.style.background = "#d9534f";
-          delBtn.title = "Delete";
-          delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-          delBtn.addEventListener("click", () => openDeleteDialog(cell.getRow()));
-
-          wrap.appendChild(completeBtn);
+          if (completeBtn) wrap.appendChild(completeBtn);
           wrap.appendChild(daybookBtn);
-          wrap.appendChild(editBtn);
-          wrap.appendChild(delBtn);
+
+          if (t.canEdit) {
+            const editBtn = document.createElement("button");
+            editBtn.className = "row-btn";
+            editBtn.style.background = "#e67e22";
+            editBtn.title = "Edit";
+            editBtn.innerHTML = '<i class="fa-solid fa-pen-to-square"></i>';
+            editBtn.addEventListener("click", () => openEditDialog(cell.getRow()));
+            wrap.appendChild(editBtn);
+          }
+
+          if (t.canDelete) {
+            const delBtn = document.createElement("button");
+            delBtn.className = "row-btn";
+            delBtn.style.background = "#d9534f";
+            delBtn.title = "Delete";
+            delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            delBtn.addEventListener("click", () => openDeleteDialog(cell.getRow()));
+            wrap.appendChild(delBtn);
+          }
+
           return wrap;
         },
       },
@@ -358,6 +465,11 @@
         },
       },
       withTextFilter({ title: "Assigned Employee", field: "employeeName", minWidth: 170, sorter: "string" }),
+      // Who handed it over. Pointless in the "Created by me" view, where the
+      // answer is always the person reading the page.
+      ...(pageConfig.scope === "created"
+        ? []
+        : [withTextFilter({ title: "Created By", field: "createdByName", width: 150, sorter: "string" })]),
       withTextFilter({ title: "Company / Client", field: "clientName", minWidth: 170, sorter: "string" }),
       withTextFilter({ title: "Title", field: "title", minWidth: 200, sorter: "string" }),
       withTextFilter({
@@ -429,7 +541,57 @@
 
   // setData/DOM updates wait for the table to exist, otherwise the first
   // render can land before Tabulator has built itself.
-  table.on("tableBuilt", renderView);
+  table.on("tableBuilt", () => {
+    renderView();
+    revealOpenTask();
+  });
+
+  /* ─── ARRIVING FROM A NOTIFICATION (?open=<taskId>) ─── */
+  // The bell's rows link here. The server already picked a scope that holds
+  // the task (GET /tasks); this finds it in whichever of the two lists it
+  // sits in, scrolls to it and flashes it.
+  function revealOpenTask() {
+    const id = pageConfig.openTaskId;
+    if (!id) return;
+
+    const rec = masterRow(id);
+    if (!rec) {
+      showToast("That task is no longer in this list.", "error");
+      return;
+    }
+    if (isDone(rec) !== showingCompleted) {
+      showingCompleted = isDone(rec);
+      renderView();
+    }
+
+    const row = table.getRows().find((r) => r.getData()._id === id);
+    if (!row) return;
+    // scrollTo rejects when the row isn't rendered yet; the flash still works.
+    Promise.resolve(row.scrollTo("center", false)).catch(() => {});
+    const el = row.getElement();
+    if (!el) return;
+    el.classList.add("row-flash");
+    setTimeout(() => el.classList.remove("row-flash"), 4000);
+  }
+
+  /* ─── "ASSIGNED TO ME" COUNT ─── */
+  // Live off GET /tasks/mine, so the figure is this person's whole plate, not
+  // just what the current view happens to show.
+  (async function paintMineCount() {
+    const el = document.getElementById("mineCount");
+    if (!el || !pageConfig.hasEmployeeIdentity) return;
+    try {
+      const res = await fetch("/app/tasks/mine", { headers: { Accept: "application/json" } });
+      if (!res.ok) return;
+      const { counts } = await res.json();
+      const outstanding = (counts?.open || 0) + (counts?.overdue || 0);
+      if (!outstanding) return;
+      el.textContent = counts.overdue ? `${outstanding} · ${counts.overdue} overdue` : String(outstanding);
+      el.classList.toggle("overdue", Boolean(counts.overdue));
+    } catch {
+      /* the count is a nicety — the list itself is already on screen */
+    }
+  })();
 
   /* ─────────────────────────────────────────
      Dialog helpers
@@ -503,6 +665,47 @@
   /* ─── ADD ─── */
   let addEmployeeChoices = null, addClientChoices = null, addStatusChoices = null;
 
+  /* "Send to employee" hands the task over: it lands in that person's
+     "Assigned to me" and rings their bell. "Keep for myself" makes it the
+     creator's own task — assigned to me, so nobody else sees it and nobody is
+     notified (the server ignores the employee picker entirely in that mode,
+     and due reminders ring my own bell). */
+  const ADD_MODE_HINTS = {
+    send: "They'll see it under “Assigned to me” and get a notification.",
+    self: "Stays with you as a reminder — nobody else sees it and no one is notified.",
+  };
+  let addMode = "send";
+
+  function setAddMode(mode) {
+    addMode = mode === "self" ? "self" : "send";
+    document.querySelectorAll("#addModeSwitch .mode-btn").forEach((btn) => {
+      const on = btn.dataset.mode === addMode;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    document.getElementById("addModeHint").textContent = ADD_MODE_HINTS[addMode];
+    // A reminder is mine by definition, so there is nothing to pick.
+    document.getElementById("addEmployeeGroup").classList.toggle("hidden-field", addMode === "self");
+    if (addMode === "self") {
+      toggleManualNameField("addAssignedToManualGroup", "addAssignedToManualInput", false);
+    }
+    hideError("addTaskError");
+  }
+
+  document.querySelectorAll("#addModeSwitch .mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setAddMode(btn.dataset.mode));
+  });
+
+  // Nothing can be "kept for" a login with no employee record behind it (the
+  // dev backdoor accounts) — there is no person for the task to belong to.
+  if (!pageConfig.hasEmployeeIdentity) {
+    const selfBtn = document.querySelector('#addModeSwitch .mode-btn[data-mode="self"]');
+    if (selfBtn) {
+      selfBtn.disabled = true;
+      selfBtn.title = "This login isn't linked to an employee record.";
+    }
+  }
+
   function openAddDialog() {
     if (addEmployeeChoices) { addEmployeeChoices.destroy(); addEmployeeChoices = null; }
     if (addClientChoices)   { addClientChoices.destroy();   addClientChoices = null; }
@@ -512,6 +715,9 @@
     addStatusChoices   = buildStatusChoices("addStatusSelect", "addStatusWrap", "PENDING");
     toggleManualNameField("addAssignedToManualGroup", "addAssignedToManualInput", false);
     toggleManualNameField("addClientManualGroup", "addClientManualInput", false);
+    // Every open starts on "Send to employee", the way the dialog has always
+    // behaved; this also paints the hint and un-hides the employee field.
+    setAddMode("send");
     document.getElementById("addTitleInput").value = "";
     document.getElementById("addLabelInput").value = "";
     document.getElementById("addDueDateInput").value = todayInputDate();
@@ -539,16 +745,27 @@
     const dueDate     = document.getElementById("addDueDateInput").value;
     const status      = addStatusChoices?.getValue(true) || "PENDING";
 
-    if (!title)      { showError("addTaskError", "Task title is required.");    return; }
-    if (!assignedTo) { showError("addTaskError", "Please select an employee."); return; }
-    if (assignedTo === OTHERS_VALUE && !assignedToManualName) { showError("addTaskError", "Please enter the employee name."); return; }
+    const keepForMyself = addMode === "self";
+
+    if (!title) { showError("addTaskError", "Task title is required."); return; }
+    // An employee is only asked for when the task is being sent to one.
+    if (!keepForMyself) {
+      if (!assignedTo) { showError("addTaskError", "Please select an employee."); return; }
+      if (assignedTo === OTHERS_VALUE && !assignedToManualName) { showError("addTaskError", "Please enter the employee name."); return; }
+    }
     if (client === OTHERS_VALUE && !clientManualName) { showError("addTaskError", "Please enter the company / client name."); return; }
     hideError("addTaskError");
     setLoading("addSubmitBtn", true);
     try {
       const res  = await fetch("/app/tasks", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, label, assignedTo, assignedToManualName, client, clientManualName, dueDate, status }),
+        body: JSON.stringify({
+          title, label, client, clientManualName, dueDate, status,
+          assignMode: keepForMyself ? "self" : "send",
+          // Left out of a reminder so the request says exactly what it means;
+          // the server ignores these in "self" mode either way.
+          ...(keepForMyself ? {} : { assignedTo, assignedToManualName }),
+        }),
       });
       const data = await res.json();
       if (data.success) { window.location.href = data.redirect || "/app/tasks"; }

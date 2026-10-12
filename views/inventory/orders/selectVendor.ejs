@@ -48,8 +48,6 @@
         const itype = String(type || "").toUpperCase();
         if (itype === 'TTR') {
           bindUrl = `/app/form/ttr-vendor-binding?itemId=${item._id}`;
-        } else if (itype === 'TAPE') {
-          bindUrl = `/app/form/vendor-item-binding/tape?itemId=${item._id}`;
         }
       %>
       <a href="<%= bindUrl %>" style="background: #dc2626; color: white; padding: 8px 16px; border-radius: 6px; font-weight: 700; text-decoration: none; font-size: 13px; white-space: nowrap;">

@@ -1,0 +1,196 @@
+<%#
+  New Vendor dialog -- opened by the "+ Vendor" button on /vendor/view (and by
+  old /form/vendor?tab=vendor links, which redirect to /vendor/view?new=vendor).
+  A <form class="so-dialog" data-so-form> inside a .so-dialog-backdrop, driven
+  by public/js/soFormDialog.js (validation + submit + soDialog.open/close).
+  Styles: /css/soDialog.css (link it from the page). Choices.js loads with
+  `defer`, so it is created on DOMContentLoaded.
+
+  Locals: `previewVendorId` (display only -- the server assigns the real one),
+  `csrfToken`.
+%>
+<%
+  const cvdPreviewId = typeof previewVendorId !== 'undefined' ? previewVendorId : '';
+  const cvdCsrf = typeof csrfToken !== 'undefined' ? csrfToken : '';
+  const cvdCommodities = ["FACE PAPER", "ADHESIVE", "RELEASE PAPER", "SL (PAPER)", "PACKAGING", "TTR", "TAPE", "POS ROLL", "TAFFETA", "PRINTERS", "SCANNERS", "SPARES", "CORE", "FOIL", "IT", "DIE", "BLOCK", "COLOR"];
+%>
+<style>
+  #create-vendor-form {
+    height: 760px;
+  }
+</style>
+
+<div id="vendor-form-dialog" class="so-dialog-backdrop" aria-hidden="true">
+
+  <!-- =========================== NEW VENDOR =========================== -->
+  <form id="create-vendor-form" class="so-dialog so-dialog--xl" action="/app/form/vendor" method="post" autocomplete="off" novalidate data-so-form role="dialog" aria-modal="true" aria-labelledby="cvd-title">
+    <input type="hidden" name="_csrf" value="<%= cvdCsrf %>" />
+
+    <div class="so-dialog__head">
+      <span class="so-dialog__icon"><i class="fa-solid fa-shop"></i></span>
+      <div>
+        <h3 class="so-dialog__title" id="cvd-title">New Vendor</h3>
+        <p class="so-dialog__desc">Vendor Id and status default automatically.</p>
+      </div>
+    </div>
+
+    <div class="so-dialog__body">
+      <div class="so-dialog__section">Vendor Details</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="vendor-id">Vendor Id</label>
+          <input type="text" value="<%= cvdPreviewId %>" id="vendor-id" placeholder="Vendor ID" readonly tabindex="-1" />
+        </div>
+        <div class="so-dialog__field">
+          <label for="vendor-name">Vendor Name <span class="so-req">*</span></label>
+          <input type="text" id="vendor-name" name="vendorName" placeholder="Enter Vendor Name" required data-so-autofocus />
+        </div>
+        <div class="so-dialog__field">
+          <label for="vendor-status">Vendor Status <span class="so-req">*</span></label>
+          <select name="vendorStatus" id="vendor-status" required>
+            <option value="ACTIVE" selected>ACTIVE</option>
+            <option value="INACTIVE">INACTIVE</option>
+            <option value="BLACKLISTED">BLACKLISTED</option>
+            <option value="OTHERS">OTHERS</option>
+          </select>
+          <input type="text" name="otherStatus" id="other-status-input" placeholder="Please specify status" style="display: none; margin-top: 8px;" disabled />
+        </div>
+      </div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="ho-location">H/O Location <span class="so-req">*</span></label>
+          <input type="text" id="ho-location" name="hoLocation" placeholder="Enter H/O Location" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="warehouse-location">Warehouse Location <span class="so-req">*</span></label>
+          <input type="text" id="warehouse-location" name="warehouseLocation" placeholder="Enter Warehouse Location" required />
+        </div>
+      </div>
+
+      <div class="so-dialog__section">Commodities</div>
+      <div class="so-dialog__field">
+        <label for="commodities-select">Commodities</label>
+        <select name="commodities" id="commodities-select" multiple>
+          <% cvdCommodities.forEach((c) => { %>
+            <option value="<%= c %>"><%= c %></option>
+          <% }) %>
+          <option value="Others">OTHERS</option>
+        </select>
+        <input type="text" name="commodities" id="other-commodity-input" placeholder="Please specify Others" style="display: none; margin-top: 8px;" disabled />
+      </div>
+
+      <div class="so-dialog__section">Compliance</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="vendor-gst">GST <span class="so-req">*</span></label>
+          <input type="text" maxlength="15" id="vendor-gst" name="vendorGst" placeholder="Enter GST" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="vendor-msme">MSME <span class="so-req">*</span></label>
+          <input type="text" maxlength="15" id="vendor-msme" name="vendorMsme" placeholder="Enter MSME" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="vendor-gumasta">Gumasta <span class="so-req">*</span></label>
+          <input type="text" id="vendor-gumasta" name="vendorGumasta" placeholder="Enter GUMASTA" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="vendor-pan">PAN <span class="so-req">*</span></label>
+          <input type="text" maxlength="10" id="vendor-pan" name="vendorPan" placeholder="Enter PAN" required />
+        </div>
+      </div>
+    </div>
+
+    <div class="so-dialog__foot">
+      <label for="vendor-verified" style="display: flex; align-items: center; gap: 8px; margin: 0 auto 0 0; font-size: 13.5px; font-weight: 600; color: var(--so-ink); cursor: pointer;">
+        <input type="checkbox" id="vendor-verified" name="verified" value="on" style="width: 16px; height: 16px; accent-color: var(--so-brand);" />
+        Verified &mdash; data checked and approved
+      </label>
+      <button type="button" class="so-btn so-btn--ghost" onclick="soDialog.close('vendor-form-dialog')">Cancel</button>
+      <button type="submit" class="so-btn so-btn--primary"><i class="fa-solid fa-check"></i> Save Vendor Details</button>
+    </div>
+  </form>
+</div>
+
+<script>
+  /* ================= NEW VENDOR: status / commodities / GST -> PAN =====
+     Runs on DOMContentLoaded: Choices.js is loaded with `defer`. */
+  document.addEventListener("DOMContentLoaded", function () {
+    const $ = (id) => document.getElementById(id);
+    const form = $("create-vendor-form");
+    const statusSelect = $("vendor-status");
+    const otherStatus = $("other-status-input");
+    const commoditiesSelect = $("commodities-select");
+    const otherCommodity = $("other-commodity-input");
+    const gstInput = $("vendor-gst");
+    const panInput = $("vendor-pan");
+    let commoditiesChoices = null;
+
+    function syncOtherStatus() {
+      const on = statusSelect.value === "OTHERS";
+      otherStatus.style.display = on ? "block" : "none";
+      otherStatus.disabled = !on;
+      otherStatus.required = on;
+      if (!on) otherStatus.value = "";
+    }
+    statusSelect.addEventListener("change", syncOtherStatus);
+
+    function syncOtherCommodity() {
+      const on = commoditiesChoices ? commoditiesChoices.getValue(true).includes("Others") : false;
+      otherCommodity.style.display = on ? "block" : "none";
+      otherCommodity.disabled = !on;
+      otherCommodity.required = on;
+      if (!on) otherCommodity.value = "";
+    }
+    commoditiesSelect.addEventListener("change", syncOtherCommodity);
+
+    try {
+      commoditiesChoices = new Choices(commoditiesSelect, {
+        removeItemButton: true,
+        searchEnabled: true,
+        shouldSort: false,
+        placeholder: true,
+        placeholderValue: "Select Commodities",
+        itemSelectText: "",
+      });
+    } catch (e) {
+      console.error("Commodities Choices initialization failed:", e);
+    }
+
+    gstInput.addEventListener("input", function () {
+      const gst = this.value.toUpperCase();
+      this.value = gst;
+      panInput.value = gst.length >= 12 ? gst.substring(2, 12) : "";
+      panInput.dispatchEvent(new Event("input"));
+      const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+      this.setCustomValidity(gst.length > 0 && !gstRegex.test(gst) ? "Invalid GST format (e.g., 22AAAAA0000A1Z5)" : "");
+    });
+
+    panInput.addEventListener("input", function () {
+      const pan = this.value.toUpperCase();
+      this.value = pan;
+      const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+      this.setCustomValidity(pan.length > 0 && !panRegex.test(pan) ? "Invalid PAN format (e.g., ABCDE1234F)" : "");
+    });
+
+    // A native form.reset() restores the plain inputs but not what this
+    // script layered on: the Choices widget (it doesn't watch the <select>)
+    // and the "specify" boxes that show/hide on OTHERS.
+    form.addEventListener("reset", () => {
+      commoditiesChoices?.removeActiveItems();
+      setTimeout(() => { syncOtherStatus(); syncOtherCommodity(); }, 0);
+    });
+
+    window.openVendorDialog = function () {
+      soDialog.open("vendor-form-dialog");
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("new") === "vendor") {
+      window.openVendorDialog();
+      params.delete("new");
+      const qs = params.toString();
+      history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+    }
+  });
+</script>
+<script src="/js/soFormDialog.js?v=1"></script>

@@ -2,6 +2,8 @@
 
 <!-- ================= TABULATOR CSS ================= -->
 <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet" />
+<!-- Form-dialog style for the New Vendor dialog (_vendorDialog.ejs) -->
+<link href="/css/soDialog.css?v=2" rel="stylesheet" />
 
 <div class="contain" style="flex-direction: column; padding: 10px; gap: 10px">
   <style>
@@ -36,10 +38,7 @@
     </style>
 
     <div style="display: flex; gap: 10px; align-items: center">
-      <button class="header-action-btn" onclick="window.location.href = '/app/form/vendor?tab=user'">
-        <i class="fa-solid fa-plus" style="margin-right: 4px"></i> Coordinator
-      </button>
-      <button class="header-action-btn" onclick="window.location.href = '/app/form/vendor?tab=vendor'">
+      <button type="button" class="header-action-btn" onclick="openVendorDialog()">
         <i class="fa-solid fa-plus" style="margin-right: 4px"></i> Vendor
       </button>
 
@@ -174,6 +173,7 @@
 </div>
 
 <!-- ================= SCRIPTS ================= -->
+<script src="/js/verification.js"></script>
 <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -256,10 +256,14 @@
           const row = cell.getRow().getData();
           const hasUsers = Number(row.userCount || 0) > 0;
           cell.getElement().classList.add("client-name-cell");
-          if (!hasUsers) {
-            return `<span style="color:#dc2626;font-weight:600;text-decoration:underline;text-decoration-color:#dc2626;">${cell.getValue()}</span>`;
-          }
-          return cell.getValue();
+          const badge = verifiedBadgeFor(row, 16);
+          // The cell's underline (.client-name-cell) isn't inherited by the
+          // inline-flex wrapper used for the badge, so the name carries its own.
+          const nameHtml = hasUsers
+            ? `<span style="text-decoration:underline;">${cell.getValue()}</span>`
+            : `<span style="color:#dc2626;font-weight:600;text-decoration:underline;text-decoration-color:#dc2626;">${cell.getValue()}</span>`;
+          if (!badge) return nameHtml;
+          return `<span style="display:inline-flex;align-items:center;gap:5px;">${nameHtml}${badge}</span>`;
         },
 
         cellClick: (e, cell) => {
@@ -370,3 +374,8 @@
     document.getElementById("vendorModal").style.display = "none";
   }
 </script>
+
+<!-- New Vendor dialog, opened by the "+ Vendor" button above and by old
+     /form/vendor?tab=vendor links (?new=vendor). New Coordinator lives on
+     /vendor/coordinator/view. -->
+<%- include('./_vendorDialog', { previewVendorId }) %>

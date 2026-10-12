@@ -1,3 +1,4 @@
+import { verificationUpdate } from "../../utils/verification.js";
 import express from "express";
 import Employee from "../../models/hr/employee_model.js";
 import Loan from "../../models/accounting/Loan.js";
@@ -281,9 +282,14 @@ router.post("/form", requireAuth, createLimiter, handleUpload, async (req, res) 
       });
     }
 
+    // Approval is stamped from the session, never taken from the posted body.
+    const vf = verificationUpdate(req);
+    delete req.body.verified; delete req.body.verifiedBy; delete req.body.verifiedAt;
+
     const isActive = req.body.status !== "inactive";
     const employeeData = {
       ...req.body,
+      ...vf.set,
       isActive,
       empInactiveReason: isActive ? "" : (req.body.empInactiveReason || ""),
       empAssetsSurrendered: isActive ? [] : parseSurrenderedAssets(req.body.empAssetsSurrenderedJson),
@@ -406,7 +412,10 @@ router.post("/edit/:id", requireAuth, updateLimiter, handleUpload, async (req, r
     replaceFile("empPanImg", "pan", "removeEmpPanImg");
     replaceFile("empBiodata", "biodata", "removeEmpBiodata");
 
-    Object.assign(emp, req.body);
+    const vf = verificationUpdate(req, emp);
+    delete req.body.verified; delete req.body.verifiedBy; delete req.body.verifiedAt;
+    Object.assign(emp, req.body, vf.set);
+    Object.keys(vf.unset).forEach((k) => emp.set(k, undefined));
     emp.isActive = req.body.status !== "inactive";
     if (emp.isActive) {
       emp.empInactiveReason = "";

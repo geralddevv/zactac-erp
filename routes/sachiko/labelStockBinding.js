@@ -8,6 +8,7 @@ import TapeSalesOrder from "../../models/inventory/TapeSalesOrder.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { createLimiter, updateLimiter, deleteLimiter } from "../../utils/limiters.js";
 import { getUserLocationNames } from "../../utils/locations.js";
+import { verificationUpdate } from "../../utils/verification.js";
 
 const router = express.Router();
 
@@ -149,7 +150,7 @@ router.post("/form/label-stock-binding", requireAuth, createLimiter, async (req,
       return res.status(400).json({ success: false, message: DUPLICATE_BINDING_MESSAGE });
     }
 
-    const binding = await LabelStockBinding.create({ labelStock: labelStockId, userId, location, paperSize, runningMeters, rate, bindingSignature });
+    const binding = await LabelStockBinding.create({ labelStock: labelStockId, userId, location, paperSize, runningMeters, rate, bindingSignature, ...verificationUpdate(req).set });
 
     user.labelStock.push(binding._id);
     await user.save();
@@ -357,6 +358,9 @@ router.post("/label-stock-binding/edit/:id", requireAuth, updateLimiter, async (
     binding.runningMeters = runningMeters;
     binding.rate = rate;
     binding.bindingSignature = bindingSignature;
+    const vf = verificationUpdate(req, binding);
+    Object.assign(binding, vf.set);
+    Object.keys(vf.unset).forEach((k) => binding.set(k, undefined));
     await binding.save();
 
     res.locals.auditDescription = `Updated Label Stock binding for user ${binding.userId}`;

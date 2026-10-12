@@ -80,6 +80,7 @@
   </div>
 
   <!-- Tabulator JS -->
+  <script src="/js/verification.js"></script>
   <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.20/jspdf.plugin.autotable.min.js"></script>
@@ -226,7 +227,7 @@
               return `
                 <span style="font-weight:600;color:${missing ? "#dc2626" : "#044A78"};text-decoration:underline;text-decoration-color:${missing ? "#dc2626" : "#044A78"}">
                   ${missing ? "-" : value}
-                </span>
+                </span>${verifiedBadgeFor(cell.getRow().getData(), 16)}
               `;
             },
             cellClick: function (e, cell) {
@@ -1183,6 +1184,7 @@
            rules for one journey. Validation still runs on Save, and bounces
            you to the panel holding the first bad field. -->
       <div class="ae-footer">
+        <label style="display:flex;align-items:center;gap:6px;margin-right:auto;font-weight:700;font-size:13px;cursor:pointer;"><input type="checkbox" name="verified" value="on" form="addEmployeeForm" id="aeVerified" style="width:16px;height:16px;cursor:pointer;"> Verified</label>
         <button type="button" class="ae-btn ae-btn-ghost" onclick="closeAddEmployeeDialog()">Cancel</button>
         <button type="button" class="ae-btn ae-btn-ghost" id="aeBackBtn" onclick="aeGoStep(-1)">
           <i class="fa-solid fa-arrow-left"></i> Back

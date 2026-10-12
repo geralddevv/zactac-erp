@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { verificationFields } from "../../utils/verification.js";
 
 let vendorSchema = new mongoose.Schema({
   vendorId: { type: String, required: true, unique: true },
@@ -13,6 +14,7 @@ let vendorSchema = new mongoose.Schema({
   vendorPan: { type: String, required: true },
   vendorSignature: { type: String, unique: true, sparse: true, trim: true },
   users: [{ type: mongoose.Schema.Types.ObjectId, ref: "VendorUser" }],
+  ...verificationFields,
 });
 
 let Vendor = mongoose.model("Vendor", vendorSchema);

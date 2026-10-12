@@ -90,6 +90,8 @@
 
     <input type="hidden" name="labelStockId" id="resolved-label-stock-id" value="<%= binding.labelStock?._id || '' %>">
 
+    <%- include('../partials/verifiedCheckbox', { doc: binding }) %>
+
     <div class="btn-grp span-full" style="display:flex;flex-direction:row;gap:10px;">
       <a href="/app/label-stock-binding/view/<%= binding.userId?._id %>" style="width:50%;color:white;background-color:#044a78;font-size:1.25rem;font-weight:500;padding:0.5rem 1.5rem;border:2px solid #044a78;border-radius:0.5rem;cursor:pointer;text-decoration:none;text-align:center;transition:all 0.3s ease-in-out;">Cancel</a>
       <button type="submit">Update Label Stock Binding</button>

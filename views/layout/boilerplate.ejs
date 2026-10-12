@@ -323,6 +323,9 @@
       .notif-item.unread { background: #e8f2fa; }
       .notif-item .notif-title { font-weight: 600; }
       .notif-item .notif-time { color: #64748b; font-size: 11px; }
+      /* Added by public/js/notifications.js only while something is unread. */
+      .notif-mark-all { background: none; border: none; padding: 0; font-size: 12px; font-weight: 600; color: #0b74c4; cursor: pointer; }
+      .notif-mark-all:hover { text-decoration: underline; }
 
       /* Premium Profile Button Style */
       #fdProfileBtn {
@@ -964,10 +967,6 @@
               <i class="fa-solid fa-file-lines" style="color: #ffffff"></i>
               <p class="nav-items-para">Label Stock</p>
             </a>
-            <a href="/app/tape/view" title="Tape View" class="<%= title === 'Tape View' ? 'nav-items active' : 'nav-items' %>" style="display: none; text-decoration: none; color: inherit;">
-              <i class="fa-solid fa-tape" style="color: #ffffff"></i>
-              <p class="nav-items-para">Tape</p>
-            </a>
           </div>
         </div>
 
@@ -1004,10 +1003,6 @@
             <a href="/app/form/label-stock-binding" title="Client Label Stock" class="<%= title === 'Client Label Stock' ? 'nav-items active' : 'nav-items' %>" style="display: none; text-decoration: none; color: inherit;">
               <i class="fa-solid fa-file-lines" style="color: #ffffff"></i>
               <p class="nav-items-para">Label Stock</p>
-            </a>
-            <a href="/app/form/tape-binding" title="Client Tape" class="<%= title === 'Client Tape' ? 'nav-items active' : 'nav-items' %>" style="display: none; text-decoration: none; color: inherit;">
-              <i class="fa-solid fa-tape" style="color: #ffffff"></i>
-              <p class="nav-items-para">Tape</p>
             </a>
           </div>
         </div>
@@ -1184,10 +1179,6 @@
               <i class="fa-regular fa-circle" style="color: #ffffff"></i>
               <p class="nav-items-para">Core</p>
             </a>
-            <a href="/app/tapestock" title="Tape Stock" class="<%= title === 'Tape Stock' ? 'nav-items active' : 'nav-items' %>" style="display: none; text-decoration: none; color: inherit;">
-              <i class="fa-solid fa-tape" style="color: #ffffff"></i>
-              <p class="nav-items-para">Tape</p>
-            </a>
             <% } %>
           </div>
         </div>
@@ -1235,11 +1226,6 @@
               <p class="nav-items-para">Purchase Order</p>
             </a>
 
-            <a href="/app/form/vendor" title="Vendor Create" class="<%= title === 'Vendor Form' ? 'nav-items active' : 'nav-items' %>" style="text-decoration: none; color: inherit; display: flex; align-items: center;">
-              <i class="fa-solid fa-shop" style="color: #ffffff"></i>
-              <p class="nav-items-para">Vendor Create</p>
-            </a>
-
             <!-- "Binding" only ever labelled "Vendor Tape" below it, which is
                  now hidden app-wide -- hiding the header too instead of
                  leaving an empty labelled group. -->
@@ -1247,10 +1233,6 @@
               <p style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #b1d4e0; margin: 0;">Binding</p>
             </div>
 
-            <a href="/app/form/vendor-item-binding/tape" title="Vendor Tape" class="<%= title === 'Vendor Tape' ? 'nav-items active' : 'nav-items' %>" style="display: none; text-decoration: none; color: inherit;">
-              <i class="fa-solid fa-tape" style="color: #ffffff"></i>
-              <p class="nav-items-para">Tape</p>
-            </a>
           </div>
         </div>
         <% } %>
@@ -1482,6 +1464,9 @@
     </div>
 
     <script src="/js/common.js?v=pwa-1" defer></script>
+    <%# After common.js (defer keeps the order), so the bell's POSTs go through
+        that file's CSRF-injecting fetch wrapper. %>
+    <script src="/js/notifications.js?v=1" defer></script>
     <script src="/js/navSearch.js" defer></script>
     <script src="/js/pwa.js?v=1" defer></script>
     <script src="/bootstrap/js/bootstrap.bundle.min.js" defer></script>
@@ -1610,7 +1595,10 @@
         });
       }
 
-      /* Notification Bell Logic (placeholder: no feed yet, see NOTIFICATIONS.md) */
+      /* Notification Bell: open/close only. The feed itself (count, rows,
+         mark-read, polling) is public/js/notifications.js -- see
+         NOTIFICATIONS.md. That file is deferred, so it hooks the same button
+         after this handler and reads .show to know the panel just opened. */
       const fdNotifBtn = document.getElementById("fdNotifBtn");
       const fdNotifMenu = document.getElementById("fdNotifMenu");
       if (fdNotifBtn && fdNotifMenu) {

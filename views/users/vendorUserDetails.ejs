@@ -250,15 +250,15 @@
         </div>
       </div>
       <div class="header-actions">
-        <button class="action-btn-header" onclick="window.location.href='/app/form/vendor'">
+        <button class="action-btn-header" onclick="window.location.href='/app/vendor/view?new=vendor'">
           <i class="fa-solid fa-building"></i> Add Vendor
         </button>
-        <button class="action-btn-header" onclick="window.location.href='/app/form/vendor?tab=user&vendorName=<%= encodeURIComponent(vendorUser.vendorName) %>'">
+        <button class="action-btn-header" onclick="window.location.href='/app/vendor/coordinator/view?new=coordinator&vendorName=<%= encodeURIComponent(vendorUser.vendorName) %>'">
           <i class="fa-solid fa-user-plus"></i> Add Coordinator
         </button>
-        <a href="/app/form/edit/vendor-user/<%= vendorUser._id %>" class="action-btn-header">
+        <button type="button" class="action-btn-header" onclick="openEditVendorUserDialog()">
           <i class="fa-solid fa-pen"></i> Edit Coordinator
-        </a>
+        </button>
         <% const coordStatus = (vendorUser.coordinatorStatus || 'ACTIVE'); %>
         <button class="action-btn-header <%= coordStatus === 'ACTIVE' ? 'warn' : '' %>" id="toggleStatusBtn"
           onclick="confirmToggleStatus()"
@@ -281,7 +281,10 @@
       </div>
       <div class="info-item">
         <span class="info-label">Coordinator Name</span>
-        <span class="info-value"><%= vendorUser.userName %></span>
+        <span class="info-value" style="display:inline-flex;align-items:center;gap:6px;">
+          <%= vendorUser.userName %>
+          <span id="coordinatorVerifiedBadge"></span>
+        </span>
       </div>
       <div class="info-item">
         <span class="info-label">H/O Location</span>
@@ -481,3 +484,13 @@
     }
   });
 </script>
+
+<!-- Verified badge beside the name, then the Edit Coordinator dialog (opened by "Edit Coordinator" above) -->
+<script src="/js/verification.js"></script>
+<script type="application/json" id="coordinator-verified-data"><%- safeJson({ verified: !!vendorUser.verified, verifiedBy: vendorUser.verifiedBy || "", verifiedAt: vendorUser.verifiedAt || null }) %></script>
+<script>
+  document.getElementById("coordinatorVerifiedBadge").innerHTML =
+    verifiedBadgeFor(JSON.parse(document.getElementById("coordinator-verified-data").textContent), 18);
+</script>
+<link href="/css/soDialog.css?v=2" rel="stylesheet" />
+<%- include('./_editVendorUserDialog', { vendorUser, vendor, initialLocationDetails }) %>

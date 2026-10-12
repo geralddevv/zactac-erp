@@ -97,7 +97,7 @@ async function getReorderData() {
           coordinators: Array.from(coordinatorMap[itemIdStr] || []).join(", "),
           locations: Array.from(locationMap[itemIdStr] || []).join(", "),
           hasVendors: (vendorMap[itemIdStr] || new Set()).size > 0,
-          bindingPath: ({ Tape: "/app/form/vendor-item-binding/tape" })[t.typeKey] || "/app/vendor/coordinator/view"
+          bindingPath: "/app/vendor/coordinator/view"
         });
       }
     });

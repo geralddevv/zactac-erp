@@ -1,0 +1,164 @@
+<%#
+  Edit Coordinator dialog -- opened by "Edit Coordinator" on
+  /vendor/coordinator/details/:userId (and by old /form/edit/vendor-user/:id
+  links, which redirect to ...details/:id?edit=1). Same look as the New
+  Coordinator dialog (_vendorUserDialog.ejs); the Vendor Information block is
+  read-only (a coordinator's vendor can't be changed here), everything else is
+  editable. Posts to POST /form/edit/vendor-user/:id, which answers JSON
+  (soFormDialog.js sends Accept: application/json).
+  Styles: /css/soDialog.css (link it from the page). Locals: `vendorUser` (the
+  coordinator), `vendor` (its vendor, may be null), `initialLocationDetails`
+  (the location rows to edit), `csrfToken`. Choices.js isn't used here.
+%>
+<%
+  const evuUser = vendorUser;
+  const evuVendor = (typeof vendor !== 'undefined' && vendor) ? vendor : {};
+  const evuSource = {
+    vendorName: evuVendor.vendorName ?? evuUser.vendorName,
+    vendorId: evuVendor.vendorId ?? evuUser.vendorId,
+    vendorStatus: evuVendor.vendorStatus ?? evuUser.vendorStatus,
+    hoLocation: evuVendor.hoLocation ?? evuUser.hoLocation,
+    warehouseLocation: evuVendor.warehouseLocation ?? evuUser.warehouseLocation,
+  };
+  const evuRows = (typeof initialLocationDetails !== 'undefined' && Array.isArray(initialLocationDetails)) ? initialLocationDetails : [];
+  const evuCsrf = typeof csrfToken !== 'undefined' ? csrfToken : '';
+%>
+<style>
+  #edit-vendor-user-form {
+    height: 760px;
+  }
+  /* Pick up details: mode, location, payment side by side. */
+  .location-row .loc-fields--pickup > select,
+  .location-row .loc-fields--pickup > input {
+    flex: 1 1 150px;
+    min-width: 130px;
+  }
+</style>
+
+<div id="edit-vendor-user-dialog" class="so-dialog-backdrop" aria-hidden="true">
+  <form id="edit-vendor-user-form" class="so-dialog so-dialog--xl" action="/app/form/edit/vendor-user/<%= evuUser._id %>" method="post" autocomplete="off" novalidate data-so-form role="dialog" aria-modal="true" aria-labelledby="evu-title">
+    <input type="hidden" name="_csrf" value="<%= evuCsrf %>" />
+
+    <div class="so-dialog__head">
+      <span class="so-dialog__icon"><i class="fa-solid fa-user-pen"></i></span>
+      <div>
+        <h3 class="so-dialog__title" id="evu-title">Edit Coordinator</h3>
+        <p class="so-dialog__desc">The vendor details are fixed — change the coordinator and the locations.</p>
+      </div>
+    </div>
+
+    <div class="so-dialog__body">
+      <div class="so-dialog__section">Vendor Information</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="evu-vendor-name">Vendor Name</label>
+          <input type="text" id="evu-vendor-name" value="<%= evuSource.vendorName %>" readonly tabindex="-1" />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-vendor-id">Vendor Id</label>
+          <input type="text" id="evu-vendor-id" value="<%= evuSource.vendorId %>" readonly tabindex="-1" />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-vendor-status">Vendor Status</label>
+          <input type="text" id="evu-vendor-status" value="<%= evuSource.vendorStatus %>" readonly tabindex="-1" />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-ho-location">H/O Location</label>
+          <input type="text" id="evu-ho-location" value="<%= evuSource.hoLocation %>" readonly tabindex="-1" />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-warehouse-location">Warehouse Location</label>
+          <input type="text" id="evu-warehouse-location" value="<%= evuSource.warehouseLocation %>" readonly tabindex="-1" />
+        </div>
+      </div>
+
+      <div class="so-dialog__section">Coordinator Information</div>
+      <div class="so-dialog__row">
+        <div class="so-dialog__field">
+          <label for="evu-user-name">Coordinator Name <span class="so-req">*</span></label>
+          <input type="text" id="evu-user-name" name="userName" value="<%= evuUser.userName %>" placeholder="Enter Coordinator Name" required data-so-autofocus />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-user-department">Department <span class="so-req">*</span></label>
+          <input type="text" id="evu-user-department" name="userDepartment" value="<%= evuUser.userDepartment %>" placeholder="Enter Department" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-user-contact-no">Contact No <span class="so-req">*</span></label>
+          <input type="text" id="evu-user-contact-no" name="userContact" value="<%= evuUser.userContact %>" placeholder="Enter Contact No" required />
+        </div>
+        <div class="so-dialog__field">
+          <label for="evu-user-email">Email <span class="so-req">*</span></label>
+          <input type="email" id="evu-user-email" name="userEmail" value="<%= evuUser.userEmail %>" placeholder="Enter Email" required />
+        </div>
+      </div>
+
+      <div class="so-dialog__section so-dialog__section--row">
+        <span>Location Details</span>
+        <div class="loc-counter">
+          <button type="button" id="evu-locations-minus" aria-label="Remove a location">&minus;</button>
+          <input type="text" id="evu-locations-count" name="locationsCount" value="1" readonly />
+          <button type="button" id="evu-locations-plus" aria-label="Add a location">+</button>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--so-faint); margin: -4px 0 10px;">
+        Each location has its own pick up details — pick up mode, pick up location and payment.
+      </div>
+      <div id="evu-locations-details" class="locations-details"></div>
+    </div>
+
+    <div class="so-dialog__foot">
+      <div style="display: flex; flex-direction: column; gap: 2px; margin: 0 auto 0 0;">
+        <label for="evu-verified" style="display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 600; color: var(--so-ink); cursor: pointer;">
+          <input type="checkbox" id="evu-verified" name="verified" value="on" style="width: 16px; height: 16px; accent-color: var(--so-brand);" <%= evuUser.verified ? "checked" : "" %> />
+          Verified &mdash; data checked and approved
+        </label>
+        <% if (evuUser.verified) { %>
+          <span style="margin-left: 24px; font-size: 12px; color: var(--so-faint);">
+            Approved by <%= evuUser.verifiedBy || "—" %><%= evuUser.verifiedAt ? " on " + new Date(evuUser.verifiedAt).toLocaleString("en-IN") : "" %>
+          </span>
+        <% } %>
+      </div>
+      <button type="button" class="so-btn so-btn--ghost" onclick="soDialog.close('edit-vendor-user-dialog')">Cancel</button>
+      <button type="submit" class="so-btn so-btn--primary"><i class="fa-solid fa-check"></i> Update Coordinator Details</button>
+    </div>
+  </form>
+</div>
+
+<script type="application/json" id="evu-rows"><%- safeJson(evuRows) %></script>
+<script src="/js/locationRepeater.js?v=1"></script>
+<script src="/js/vendorLocationRepeater.js?v=1"></script>
+<script>
+  (function () {
+    const form = document.getElementById("edit-vendor-user-form");
+    const rows = JSON.parse(document.getElementById("evu-rows").textContent || "[]");
+    const repeater = createVendorLocationRepeater({
+      container: document.getElementById("evu-locations-details"),
+      countInput: document.getElementById("evu-locations-count"),
+      minus: document.getElementById("evu-locations-minus"),
+      plus: document.getElementById("evu-locations-plus"),
+    });
+    formatMobileInput(document.getElementById("evu-user-contact-no"));
+
+    // Put the saved rows in (and back, after a Cancel/re-open): a native
+    // form.reset() restores the plain inputs but not the rebuilt location cards.
+    function loadRows() { repeater.setRows(rows); }
+    loadRows();
+    form.addEventListener("reset", () => setTimeout(loadRows, 0));
+
+    window.openEditVendorUserDialog = function () {
+      soDialog.open("edit-vendor-user-dialog");
+    };
+
+    // soFormDialog.js (soDialog) loads after this script, so wait for it.
+    document.addEventListener("DOMContentLoaded", function () {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("edit") === "1") {
+        window.openEditVendorUserDialog();
+        params.delete("edit");
+        const qs = params.toString();
+        history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+      }
+    });
+  })();
+</script>
+<script src="/js/soFormDialog.js?v=1"></script>

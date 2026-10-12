@@ -1,6 +1,8 @@
 <% layout('/layout/boilerplate') -%>
 
 <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet" />
+<!-- Form-dialog style for the New Coordinator dialog (_vendorUserDialog.ejs) -->
+<link href="/css/soDialog.css?v=2" rel="stylesheet" />
 
 <div class="contain" style="flex-direction: column; padding: 10px; gap: 10px">
   <style>
@@ -165,14 +167,8 @@
     <h1>Vendor Coordinator View</h1>
 
     <div style="display: flex; gap: 10px; align-items: center">
-      <button class="header-action-btn" onclick="window.location.href = '/app/form/vendor'">
-        <i class="fa-solid fa-plus" style="margin-right: 4px"></i> Vendor
-      </button>
-      <button class="header-action-btn" onclick="window.location.href = '/app/form/vendor?tab=user'">
+      <button type="button" class="header-action-btn" onclick="openVendorUserDialog()">
         <i class="fa-solid fa-plus" style="margin-right: 4px"></i> Coordinator
-      </button>
-      <button class="header-action-btn" onclick="window.location.href = '/app/ttr-vendor/view'">
-        <i class="fa-solid fa-eye" style="margin-right: 4px"></i> TTRs
       </button>
 
       <div class="download-selector" id="downloadSelector">
@@ -201,6 +197,7 @@
   <div id="master-table" class="tabulator tabulator-modern"></div>
 </div>
 
+<script src="/js/verification.js"></script>
 <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.20/jspdf.plugin.autotable.min.js"></script>
@@ -312,7 +309,6 @@
     if (!rowId) return null;
     switch (String(commodity || "").trim().toUpperCase()) {
       case "TTR": return `/app/ttr-vendor/view?userId=${encodeURIComponent(rowId)}`;
-      case "TAPE": return `/app/vendor-item/view/tape?userId=${encodeURIComponent(rowId)}`;
       default: return null;
     }
   }
@@ -491,7 +487,7 @@
           formatter: (cell) => {
             const row = cell.getRow().getData();
             if (!row?._id) return cell.getValue() || "";
-            return `<span class="count-link">${cell.getValue() || ""}</span>`;
+            return `<span style="display:inline-flex;align-items:center;gap:5px;"><span class="count-link">${cell.getValue() || ""}</span>${verifiedBadgeFor(row, 16)}</span>`;
           },
           cellClick: (e, cell) => {
             const row = cell.getRow().getData();
@@ -581,3 +577,7 @@
   }
 </script>
 <% } %>
+
+<!-- New Coordinator dialog, opened by the "+ Coordinator" button above and by
+     "Add Coordinator" links on the vendor pages (?new=coordinator&vendorName=...). -->
+<%- include('./_vendorUserDialog', { vendors }) %>

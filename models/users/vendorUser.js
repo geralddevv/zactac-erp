@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { verificationFields } from "../../utils/verification.js";
 const { Schema } = mongoose;
 
 const locationDetailSchema = new mongoose.Schema(
@@ -70,6 +71,8 @@ const vendorUserSchema = new mongoose.Schema({
       to: { type: Date, default: null },
     },
   ],
+
+  ...verificationFields,
 
   tape: [
     {

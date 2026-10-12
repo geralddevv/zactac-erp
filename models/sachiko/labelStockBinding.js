@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { verificationFields } from "../../utils/verification.js";
 
 const labelStockBindingSchema = new mongoose.Schema(
   {
@@ -15,6 +16,7 @@ const labelStockBindingSchema = new mongoose.Schema(
     // Deliberately excludes location: two bindings that agree on SKU, paper
     // size, RM, client and user are the same binding regardless of location.
     bindingSignature: { type: String, unique: true, sparse: true, trim: true },
+    ...verificationFields,
   },
   { timestamps: true },
 );
