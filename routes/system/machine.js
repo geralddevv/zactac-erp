@@ -327,6 +327,10 @@ router.get("/machine/queue", requireMachineFloor, async (req, res) => {
       deckleCount: job.deckleCount,
       deckleDone: job.deckleDone,
       deckleLeft: job.deckleLeft,
+      // The layout's whole run, which is what the list counts in -- see
+      // buildLayoutRuns in routes/system/slitting.js.
+      layoutRunTotal: job.layoutRunTotal,
+      layoutRunDone: job.layoutRunDone,
       plannedRolls: job.plannedRolls,
       curing: !!job.curing,
       running: (job.deckles || []).some((d) => d.running),

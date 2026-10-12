@@ -173,9 +173,9 @@
     .mq-job > span, .mq-job > .mq-job-sep { flex: 0 0 auto; white-space: nowrap; }
     .mq-job > .mq-job-rolls { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .mq-job > span:last-child { font-weight: 600; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    /* Slitting card view: one block per product + cut pattern -- every detail
-       on a single row, the progress bar full width beneath it, and a clear
-       rule between one block and the next. */
+    /* Slitting card view: one block per knife layout -- every detail on a
+       single row, the progress bar full width beneath it, and a clear rule
+       between one block and the next. */
     .mq-sgroup {
       display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
       border-top: 0; border-bottom: 2px solid #c3cfdc; color: #334155; text-decoration: none;
@@ -343,13 +343,17 @@
       </a>`;
   }
 
-  // Slitting: cards cut to the same pattern for the same product are one block
-  // (as on the machine's own queue): the pattern, how many cards / lots /
-  // Deckles, how far along, and a green play icon when one is running.
+  // Slitting: cards cut to the same KNIFE LAYOUT are one block (as on the
+  // machine's own queue), whatever their Product Code -- the setting on the
+  // machine is what they share. The block names the pattern, how far the
+  // layout's run has got, how many Deckles of it are still to run, and carries
+  // a green play icon when one is running. Deliberately NOT a card count or a
+  // lot count: one card is one Deckle and a slitting card's lot no IS its
+  // Deckle id, so all three were the same number said three ways.
   function slitGroupsHtml(machine, jobs) {
     const groups = new Map();
     jobs.forEach(j => {
-      const key = (j.productCode || "") + "\u0000" + (j.layoutKey || "");
+      const key = j.layoutKey || "none-" + j._id;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(j);
     });
@@ -358,8 +362,18 @@
     return [...groups.values()].map(list => {
       const first = list[0];
       const running = list.some(j => j.running);
-      const total = sum(list, "deckleCount"), done = sum(list, "deckleDone"), left = sum(list, "deckleLeft");
-      const lots = uniq(list.map(j => j.lotNo)).length;
+      // The layout's run, not these cards alone: every Deckle at this setting,
+      // finished cards included (buildLayoutRuns in routes/system/slitting.js).
+      // One run per group, so the first card's figures are the group's.
+      const total = Number(first.layoutRunTotal) || sum(list, "deckleCount");
+      const done = Number(first.layoutRunDone) || 0;
+      const left = total - done;
+      // Deckles of this layout still on the queue. Read off the cards in the
+      // block rather than as total - done, so the chip describes what is
+      // actually listed here.
+      const deckles = sum(list, "deckleLeft");
+      const codes = uniq(list.map(j => j.productCode));
+      const codeText = codes.length > 2 ? codes.length + " products" : codes.join(", ");
       const clients = uniq(list.map(j => j.clientName));
       const clientText = clients.length > 2 ? clients.length + " clients" : clients.join(", ");
       const pct = total ? Math.round((done / total) * 100) : 0;
@@ -367,11 +381,10 @@
       return `
         <a class="mq-sgroup${running ? " is-running" : ""}" href="/app/machine/${encodeURIComponent(machine._id)}/queue">
           <div class="mq-sg-row">
-            <span class="mq-sg-code">${escapeHtml(dash(first.productCode) || "—")}</span>
+            <span class="mq-sg-code" title="${escapeHtml(codes.join(", "))}">${escapeHtml(codeText || "—")}</span>
             <span class="mq-sg-layout" title="Cut layout">${escapeHtml(niceLayout(first.layoutKey) || "No layout")}</span>
             <span class="mq-sg-count" title="${done} of ${total} Deckle${total === 1 ? "" : "s"} made, ${left} to run"><b>${done}</b> / ${total}</span>
-            <span><b>${list.length}</b> card${list.length === 1 ? "" : "s"}</span>
-            <span><b>${lots}</b> lot${lots === 1 ? "" : "s"}</span>
+            <span title="${deckles} Deckle${deckles === 1 ? "" : "s"} of this layout still to run"><b>${deckles}</b> deckle${deckles === 1 ? "" : "s"}</span>
             ${clientText ? `<span class="mq-sg-client" title="${escapeHtml(clients.join(", "))}">${escapeHtml(clientText)}</span>` : ""}
             ${curing ? '<span style="color:#b45309;"><i class="fa-solid fa-hourglass-half"></i> curing</span>' : ""}
             ${running ? '<i class="fa-solid fa-circle-play mq-sg-run" title="A Deckle is running"></i>' : ""}

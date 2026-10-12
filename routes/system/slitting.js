@@ -368,6 +368,132 @@ async function deckleOptionsFor(pending) {
   });
 }
 
+// ---- Deckle numbering across a layout's run --------------------------------
+//
+// One Slitting Job Card is ONE Deckle (see the allocation POST below: each
+// ticked Deckle gets its own card), so "5 Deckles cut 210 + 210 + 210" is five
+// cards allocated in one submit -- and every Deckle slit takes its card off the
+// queue, because the card auto-completes at its own Stop.
+//
+// The floor counts Deckles by the knife setting, not by the card and not by the
+// Product Code: what the operator wants to read is "6 of 10 on this layout",
+// and that count has to keep running when more work arrives for a setting
+// already up on the machine.
+//
+// A LAYOUT RUN is therefore every Deckle -- slit or still to run -- at one
+// knife layout on one machine, chained through overlapping allocations: a card
+// joins the run of the card before it when that one was still open at the
+// moment this one was allocated. The chain breaks wherever the layout ran dry
+// (nothing of it open when the next card came), and that break is what starts
+// the numbering over -- so the count runs "until the layout is finished" and
+// no further. Product Code is deliberately NOT part of the key: the knife
+// setting is the same whatever is being cut on it.
+//
+// Positions are handed out in allocation order and never move, so a Deckle slit
+// early keeps its number and the ones still to run read 3/10, 4/10, ... as more
+// work lands on the same layout. Finished cards are off the queue but still
+// counted, which is what makes the denominator grow instead of resetting.
+//
+// How far back finished cards are chased. A run ends by itself when the machine
+// runs out of that layout, so this only bounds the query -- every finished card
+// the machine ever had would otherwise be read on each queue load. A single
+// knife setting is not kept continuously fed for two months.
+const LAYOUT_RUN_LOOKBACK_DAYS = 60;
+
+// The cut patterns a card's Deckles run, as label -> how many of its Deckles
+// run it. One builder so the queue's layout summary and the run's pool key can
+// never drift apart.
+function layoutGroupsOf(rows) {
+  const groups = new Map();
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const widths = (Array.isArray(r.cuts) ? r.cuts : [])
+      .map((cut) => Number(cut.width))
+      .filter((w) => w > 0);
+    if (!widths.length) continue;
+    const label = widths.map((w) => (w % 1 ? w.toFixed(2) : String(w))).join(" + ");
+    groups.set(label, (groups.get(label) || 0) + 1);
+  }
+  return groups;
+}
+
+const layoutKeyOf = (rows) => [...layoutGroupsOf(rows).keys()].sort().join("  |  ");
+
+// Where each of `openCards` sits in its layout run:
+//   Map<cardId, { from, total, done, plannedRolls, producedRolls }>
+// `from` is the position of the card's FIRST Deckle, so its i-th Deckle is at
+// `from + i`. Pools are keyed on machine + layout and are read across every
+// card on that machine, not just the ones `match` selected -- an operator
+// looking at their own cards must still see the machine's own numbering.
+async function buildLayoutRuns(openCards) {
+  const machineIds = [
+    ...new Set(openCards.map((c) => String(c.machineId || "")).filter((id) => mongoose.isValidObjectId(id))),
+  ];
+  if (!machineIds.length) return new Map();
+
+  const since = new Date(Date.now() - LAYOUT_RUN_LOOKBACK_DAYS * 86400000);
+  const cards = await SlittingJobCard.find({
+    machineId: { $in: machineIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    // Open cards are never windowed out (one of them may be what we are
+    // numbering); only finished ones are, and those just pad the count.
+    $or: [{ status: "allocated" }, { status: "completed", createdAt: { $gte: since } }],
+  })
+    .select("machineId status createdAt completedAt slittingLog.status slittingLog.cuts.width")
+    .sort({ createdAt: 1, _id: 1 })
+    .lean();
+
+  // machine + layout -> its cards, oldest allocation first. A card whose
+  // Deckle has no recorded cuts has no layout to share, so it pools alone.
+  const pools = new Map();
+  for (const c of cards) {
+    const layout = layoutKeyOf(c.slittingLog);
+    const key = `${String(c.machineId)}\u0000${layout || `none-${String(c._id)}`}`;
+    if (!pools.has(key)) pools.set(key, []);
+    pools.get(key).push(c);
+  }
+
+  const openIds = new Set(openCards.map((c) => String(c._id)));
+  const out = new Map();
+  for (const list of pools.values()) {
+    if (!list.some((c) => openIds.has(String(c._id)))) continue;
+
+    // The run in progress: walk back from the newest card while each card's
+    // predecessor was still open when that card was allocated. An open card is
+    // always inside this last chain -- it has been open ever since it was
+    // allocated, so the layout cannot have run dry after it.
+    let start = list.length - 1;
+    while (start > 0) {
+      const prev = list[start - 1];
+      const openThen =
+        prev.status !== "completed" ||
+        !prev.completedAt ||
+        new Date(prev.completedAt).getTime() >= new Date(list[start].createdAt).getTime();
+      if (!openThen) break;
+      start -= 1;
+    }
+    const run = list.slice(start);
+
+    const rowsOf = (c) => (Array.isArray(c.slittingLog) ? c.slittingLog : []);
+    const cuts = (r) => (Array.isArray(r.cuts) ? r.cuts.length : 0);
+    const total = run.reduce((n, c) => n + rowsOf(c).length, 0);
+    const done = run.reduce((n, c) => n + rowsOf(c).filter((r) => r.status === "done").length, 0);
+    const plannedRolls = run.reduce((n, c) => n + rowsOf(c).reduce((m, r) => m + cuts(r), 0), 0);
+    const producedRolls = run.reduce(
+      (n, c) => n + rowsOf(c).filter((r) => r.status === "done").reduce((m, r) => m + cuts(r), 0),
+      0,
+    );
+
+    let pos = 0;
+    for (const c of run) {
+      const from = pos + 1;
+      pos += rowsOf(c).length;
+      if (openIds.has(String(c._id))) {
+        out.set(String(c._id), { from, total, done, plannedRolls, producedRolls });
+      }
+    }
+  }
+  return out;
+}
+
 // Every open slitting job on a machine / for an operator, in the shape the
 // queue pages render. Exported so routes/system/machine.js can fold slitting
 // jobs into the machine and operator queues without re-deriving any of it.
@@ -396,6 +522,9 @@ export async function buildSlittingQueueRows(match) {
     : [];
   const cureByReel = new Map(cureReels.map((r) => [String(r._id), deckleCuring(r)]));
 
+  // Deckle numbering across each layout's run -- see buildLayoutRuns.
+  const runs = await buildLayoutRuns(cards);
+
   return cards.map((c) => {
     const rows = Array.isArray(c.slittingLog) ? c.slittingLog : [];
     const done = rows.filter((r) => r.status === "done").length;
@@ -410,6 +539,7 @@ export async function buildSlittingQueueRows(match) {
     );
 
     const undoBlock = slittingUndoBlock(c);
+    const run = runs.get(String(c._id)) || null;
 
     // The knife layout(s) this card's Deckles are cut to -- one line per
     // distinct cut pattern, its roll widths and how many Deckles run it.
@@ -418,15 +548,7 @@ export async function buildSlittingQueueRows(match) {
     // mix patterns even though the common case is one pattern across every
     // row. Grouped so the queue shows "150 + 200 + 150 × 8" rather than
     // repeating the same pattern once per Deckle.
-    const layoutGroups = new Map();
-    for (const r of rows) {
-      const widths = (Array.isArray(r.cuts) ? r.cuts : [])
-        .map((cut) => Number(cut.width))
-        .filter((w) => w > 0);
-      if (!widths.length) continue;
-      const label = widths.map((w) => (w % 1 ? w.toFixed(2) : String(w))).join(" + ");
-      layoutGroups.set(label, (layoutGroups.get(label) || 0) + 1);
-    }
+    const layoutGroups = layoutGroupsOf(rows);
     const layoutSummary = [...layoutGroups.entries()]
       .map(([label, n]) => `${label}${n > 1 ? ` × ${n}` : ""}`)
       .join("  |  ");
@@ -453,18 +575,32 @@ export async function buildSlittingQueueRows(match) {
       // The cut pattern(s) alone, without the "× n" Deckle counts -- two cards
       // cut to the same pattern share this key whatever their Deckle counts
       // (the machine queue folds them into one expandable row).
-      layoutKey: [...layoutGroups.keys()].sort().join("  |  "),
+      layoutKey: layoutKeyOf(rows),
       deckleCount: rows.length,
       deckleDone: done,
       deckleLeft: rows.length - done,
+      // This card's place in its layout's run (buildLayoutRuns): the Deckles
+      // of every card at this knife layout on this machine, counted as one
+      // series across cards and Product Codes, finished cards included. This
+      // is what the queues count in ("6 of 10"), NOT the card's own
+      // deckleCount/deckleDone above, which only ever describe this one card.
+      // Absent only if the card somehow fell out of its own pool -- the card's
+      // own figures then stand in, so a reader never sees a blank.
+      layoutRunTotal: run ? run.total : rows.length,
+      layoutRunDone: run ? run.done : done,
+      layoutRunPlannedRolls: run ? run.plannedRolls : 0,
+      layoutRunProducedRolls: run ? run.producedRolls : 0,
       // Each Deckle's id and whether it has run -- additive, read only by the
       // operator app's queue, which bundles same-layout cards into one tile and
       // uses these to find which card a scanned Deckle belongs to.
-      deckles: rows.map((r) => ({
+      deckles: rows.map((r, i) => ({
         id: r.deckleId || "",
         done: r.status === "done",
         // On the slitter now (same test the WIP page uses for its live Deckle).
         running: r.status !== "done" && !!r.startedAt,
+        // 1-based place in the layout run -- the "6" of "6 of 10". Positions
+        // are fixed at allocation order, so they never move under a reader.
+        pos: run ? run.from + i : i + 1,
       })),
       // Rolls this card will produce once every row is run.
       plannedRolls: rows.reduce((n, r) => n + (Array.isArray(r.cuts) ? r.cuts.length : 0), 0),
@@ -1970,11 +2106,18 @@ export async function buildSlittingCard(cardId) {
   // This machine's speed from Machine Master (SLITTING_SPEED_MPM where none is
   // set) -- what the app's overtime reminder times each Deckle against.
   const speedMpm = (await slittingSpeedsByMachine([card.machineId])).get(String(card.machineId)) || SLITTING_SPEED_MPM;
+  // Where this card's Deckle sits in its knife layout's run, so the card names
+  // the Deckle by the same number the queues do ("Deckle 6 of 10") -- see
+  // buildLayoutRuns. One card is one Deckle, hence `run.from` per row.
+  const run = (await buildLayoutRuns([card])).get(String(card._id)) || null;
 
   return {
     ok: true,
     card: {
       timing: { speedMpm },
+      // The layout run this card belongs to, or null for a card whose Deckle
+      // has no recorded cuts (nothing to share a setting with).
+      layoutRun: run ? { from: run.from, total: run.total, done: run.done } : null,
       _id: String(card._id),
       slittingJobCardId: card.slittingJobCardId,
       date: card.date,
@@ -2002,6 +2145,8 @@ export async function buildSlittingCard(cardId) {
         return {
           index: i,
           deckleId: r.deckleId || reel?.rollId || "",
+          // This Deckle's place in its layout's run -- the "6" of "6 of 10".
+          runPos: run ? run.from + i : null,
           width: r.width ?? null,
           // orderedWidth rides along where the cut was graced, so the operator's
           // card can say a roll is cut wider than it is sold at.

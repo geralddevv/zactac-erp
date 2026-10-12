@@ -300,8 +300,18 @@
               <td data-label="Product Code"><%= row.productCode %></td>
               <td data-label="Client" title="<%= row.clientName %>"><%= row.clientName %></td>
               <td data-label="Deckles">
-                <%= row.deckleLeft %> to run
-                <% if (row.deckleDone > 0) { %><span style="color:#64748b;font-weight:600;font-size:11px;">(<%= row.deckleDone %> of <%= row.deckleCount %> done)</span><% } %>
+                <%# Counted through the knife layout's whole run, not this card
+                    alone (buildLayoutRuns in routes/system/slitting.js): one
+                    card is one Deckle, so what the operator wants is where this
+                    one sits among every Deckle at the setting -- "6 of 10". %>
+                <% const pos = (row.deckles || []).map((d) => d.pos).filter(Boolean); %>
+                <% if (pos.length) { %>
+                  <strong>Deckle <%= pos.length === 1 ? pos[0] : pos[0] + "–" + pos[pos.length - 1] %> of <%= row.layoutRunTotal %></strong>
+                  <br><span style="color:#64748b;font-weight:600;font-size:11px;">on this layout<% if (row.layoutRunDone > 0) { %> · <%= row.layoutRunDone %> slit<% } %></span>
+                <% } else { %>
+                  <%= row.deckleLeft %> to run
+                  <% if (row.deckleDone > 0) { %><span style="color:#64748b;font-weight:600;font-size:11px;">(<%= row.deckleDone %> of <%= row.deckleCount %> done)</span><% } %>
+                <% } %>
                 <% if (row.curing) { %><br><span style="color:#b45309;font-weight:700;font-size:11px;"><i class="fa-solid fa-hourglass-half"></i> curing<% if (row.curingUntilLabel) { %> · ready <%= row.curingUntilLabel %><% } %></span><% } %>
               </td>
               <td data-label="Rolls"><%= row.producedRolls %> of <%= row.plannedRolls %></td>

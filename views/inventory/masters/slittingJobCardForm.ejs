@@ -282,6 +282,18 @@
           <span class="sl-job-label">Rolls</span>
           <span class="sl-job-value"><%= totalPlannedRolls %></span>
         </div>
+        <%# This Deckle counted through its knife layout's RUN, not through this
+            card -- one card is one Deckle, so the useful figure is where it
+            sits among every Deckle at this setting on this machine, across
+            cards and Product Codes and counting the ones already slit
+            (buildLayoutRuns in routes/system/slitting.js). The machine queue
+            and the operator app number the same Deckle the same way. %>
+        <% if (card.layoutRun) { %>
+        <div class="sl-job-cell">
+          <span class="sl-job-label">Deckle</span>
+          <span class="sl-job-value"><%= card.layoutRun.from %> of <%= card.layoutRun.total %></span>
+        </div>
+        <% } %>
       </div>
     </div>
   </div>

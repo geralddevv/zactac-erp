@@ -303,10 +303,11 @@
     <h2 style="margin: 0; font-size: 1.3rem; font-weight: 600; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-scissors"></i> Slitting Jobs</h2>
     <span style="font-size: 1.1rem; font-weight: 600;"><%= slitRows.length %> card<%= slitRows.length === 1 ? "" : "s" %></span>
   </div>
-  <%# Cards cut to the same pattern for the same product are folded into one
-      row (Tabulator dataTree); expanding it lists every Deckle ID allocated,
-      under the card it belongs to. Built in the script at the foot of the page
-      from #slit-queue-data. The table sits outside the heading's card. %>
+  <%# Cards cut to the same knife layout are folded into one row (Tabulator
+      dataTree), whatever their Product Code -- the setting on the machine is
+      what they share. Expanding it lists every Deckle allocated, numbered
+      numbered through the layout's run. Built in the script at the foot of the
+      page from #slit-queue-data. The table sits outside the heading's card. %>
   <div id="slit-queue-table"></div>
   <script id="slit-queue-data" type="application/json"><%- safeJson({ rows: slitRows, canEdit: !!(authUser && authUser.role !== "operator") }) %></script>
   <% } %>
@@ -577,7 +578,7 @@
 
 <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
 <script>
-  // Slitting Jobs: one row per (product + cut pattern), Deckle IDs inside.
+  // Slitting Jobs: one row per knife layout, its Deckles numbered inside.
   (function () {
     const mount = document.getElementById("slit-queue-table");
     if (!mount) return;
@@ -607,10 +608,14 @@
       ? '<div style="color:#b45309;font-weight:700;font-size:11px;margin-top:3px;"><i class="fa-solid fa-hourglass-half"></i> curing' + (c.curingUntilLabel ? " · ready " + esc(c.curingUntilLabel) : "") + "</div>"
       : "";
 
-    // Group in first-seen order.
+    // One row per KNIFE LAYOUT, in first-seen order -- not per product. The
+    // knife setting is what the machine is set up for, so every card cut to
+    // "210 + 210 + 210" belongs together however many Product Codes and
+    // clients are among them (the group names them all). A card whose Deckle
+    // has no recorded cuts has no layout to share and stands alone.
     const groups = new Map();
     cards.forEach((c) => {
-      const key = c.productCode + "\u0000" + (c.layoutKey || "");
+      const key = c.layoutKey || "none-" + c._id;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(c);
     });
@@ -621,23 +626,37 @@
       const first = list[0];
       const sr = ++srNo;
       const multi = list.length > 1;
-      // Every Deckle of every card in the group, the one on the slitter now
-      // first (the rest keep card order).
+      // Every Deckle of every card in the group, in the order of the layout's
+      // run -- so the column reads 3, 4, 5 straight down. The Deckle
+      // on the slitter now is marked by its own green row, not by being moved
+      // to the top, which would scramble the numbering.
       const flat = [];
       list.forEach((c) => {
         const decks = Array.isArray(c.deckles) && c.deckles.length ? c.deckles : [{ id: "", done: false, running: false }];
         decks.forEach((d) => flat.push({ c, d }));
       });
-      flat.sort((x, y) => (y.d.running ? 1 : 0) - (x.d.running ? 1 : 0));
+      flat.sort((x, y) => (Number(x.d.pos) || 0) - (Number(y.d.pos) || 0));
+      // Deckles of this layout's run (buildLayoutRuns in routes/system/slitting.js):
+      // counted across every card at this setting, finished cards included, so
+      // the figure keeps climbing as more work lands on a setting already up.
+      // Every card here shares one run, so the first card's figures are the run's.
+      const total = Number(first.layoutRunTotal) || list.reduce((a, c) => a + c.deckleCount, 0);
+      const done = Number(first.layoutRunDone) || 0;
+      const planned = Number(first.layoutRunPlannedRolls) || list.reduce((a, c) => a + c.plannedRolls, 0);
+      const made = Number(first.layoutRunProducedRolls) || 0;
       const seenCard = new Set();
       const children = flat.map(({ c, d }) => {
         const firstOfCard = !seenCard.has(c._id);
         seenCard.add(c._id);
         return {
           id: "c" + (++n),
+          // This Deckle's place in the run -- the bare number. The run's total
+          // is already on the group row above (Deckles "1 / 7"), so repeating
+          // "/ 7" down every row inside it only adds noise.
+          sr: d.pos || "",
+          srTitle: d.pos ? "Deckle " + d.pos + " of " + total + " at this knife layout" : "",
           deckleId: d.id || "—",
           slit: c.slittingJobCardId,
-          lot: c.lotNo,
           product: c.productCode,
           client: c.clientName,
           layout: c.layoutSummary || "—",
@@ -647,10 +666,6 @@
           actions: multi && firstOfCard ? actionsHtml(c) : "",
         };
       });
-      const total = list.reduce((a, c) => a + c.deckleCount, 0);
-      const done = list.reduce((a, c) => a + c.deckleDone, 0);
-      const planned = list.reduce((a, c) => a + c.plannedRolls, 0);
-      const made = list.reduce((a, c) => a + c.producedRolls, 0);
       tree.push({
         id: "g" + (++n),
         isGroup: true,
@@ -658,21 +673,34 @@
         sr: sr,
         deckleId: total + " Deckle" + (total === 1 ? "" : "s"),
         slit: joinShort(uniq(list.map((c) => c.slittingJobCardId)), "cards"),
-        lot: (() => { const n = uniq(list.map((c) => c.lotNo)).length; return n + (n === 1 ? " lot" : " lots"); })(),
-        product: first.productCode,
+        product: joinShort(uniq(list.map((c) => c.productCode)), "products"),
         client: joinShort(uniq(list.map((c) => c.clientName)), "clients"),
+        // The cells above shorten a long list to "3 products" / "3 clients",
+        // which the column filters could then never match -- they filter on
+        // these full lists instead (see filterList below).
+        productAll: uniq(list.map((c) => c.productCode)).join(", "),
+        clientAll: uniq(list.map((c) => c.clientName)).join(", "),
         layout: first.layoutKey || "—",
-        left: total - done,
         done: done,
         total: total,
         curing: list.some((c) => c.curing) ? curingHtml(list.find((c) => c.curing)) : "",
-        slice: made + " of " + planned,
+        <%# Every x/y figure in a group row counts the layout's RUN and counts
+            UP (done of total), so Sr. No., Deckles and Slice all read alike.
+            Each carries the long form as its tooltip. %>
+        deckleTitle: done + " of " + total + " Deckles slit on this layout's run — "
+          + (total - done) + " still to run",
+        slice: made + " / " + planned,
+        sliceTitle: made + " of " + planned + " finished rolls cut on this layout's run",
         actions: multi ? "" : actionsHtml(first),
         _children: children,
       });
     });
 
     const html = (fn) => (cell) => fn(cell.getData(), cell.getValue());
+    // A column filter for a cell that may read "3 products": match what the
+    // group actually holds (its `<field>All` list), falling back to the cell.
+    const filterList = (field) => (typed, value, data) =>
+      String(data[field] || value || "").toLowerCase().includes(String(typed).toLowerCase());
     const table = new Tabulator(mount, {
       data: tree,
       layout: "fitColumns",
@@ -694,25 +722,35 @@
           formatter: (cell) => (cell.getData().isGroup
             ? '<span class="sq-chev' + (cell.getRow().isTreeExpanded() ? " is-open" : "") + '" aria-hidden="true"><i class="fa-solid fa-chevron-right"></i></span>'
             : "") },
+        <%# A group's own number down the page; inside it, each Deckle's place
+            in the layout's run -- a bare number, the total being on the group
+            row's Deckles cell. %>
         { title: "Sr. No.", field: "sr", width: 70, hozAlign: "center", headerHozAlign: "center", headerSort: false,
-          formatter: html((r, v) => (r.isGroup ? esc(v) : "")) },
+          formatter: html((r, v) => (r.isGroup
+            ? esc(v)
+            : (v ? '<span style="font-weight:700;color:#334155;white-space:nowrap;" title="' + esc(r.srTitle || "") + '">' + esc(v) + "</span>" : ""))) },
         { title: "Deckle ID", field: "deckleId", widthGrow: 1.6, minWidth: 170, headerSort: false,
           formatter: html((r, v) => (r.isGroup
             ? '<span style="font-weight:700;white-space:nowrap;">' + esc(v) + "</span>" + (r.hasRunning ? '<span class="sq-run-badge"><i class="fa-solid fa-circle-play"></i> Running</span>' : "")
             : esc(v))) },
-        { title: "Lot Count", field: "lot", widthGrow: 0.8, minWidth: 100, headerSort: false,
-          formatter: html((r, v) => (!r.isGroup ? "" : v ? '<span style="font-weight:700;">' + esc(v) + "</span>" : '<span style="color:#9ca3af;">—</span>')) },
-        { title: "Product Code", field: "product", widthGrow: 0.9, minWidth: 110, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter code...",
+        { title: "Product Code", field: "product", widthGrow: 0.9, minWidth: 110, headerSort: false,
+          headerFilter: "input", headerFilterPlaceholder: "Filter code...", headerFilterFunc: filterList("productAll"),
           formatter: html((r, v) => '<span style="font-weight:700;">' + esc(v || "N/A") + "</span>") },
-        { title: "Client", field: "client", widthGrow: 1.5, minWidth: 130, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter client...",
+        { title: "Client", field: "client", widthGrow: 1.5, minWidth: 130, headerSort: false,
+          headerFilter: "input", headerFilterPlaceholder: "Filter client...", headerFilterFunc: filterList("clientAll"),
           formatter: html((r, v) => (v && v !== "—" ? esc(v) : '<span style="color:#9ca3af;">—</span>')) },
         { title: "Layout", field: "layout", widthGrow: 1.5, minWidth: 140, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter layout...",
           formatter: html((r, v) => (v && v !== "—" ? esc(String(v).replace(/ \+ /g, " - ")) : '<span style="color:#9ca3af;">—</span>')) },
         { title: "Deckles", field: "status", widthGrow: 1.2, minWidth: 130, headerSort: false,
           formatter: html((r) => {
+            <%# Deckles slit of the layout's run, written like Sr. No. and
+                Slice ("1 / 7") -- the long form is the tooltip on both the
+                figure and the bar. The figure is deliberately done/total, the
+                same direction as Slice, so every x/y in the row counts up. %>
             if (r.isGroup) {
-              return '<div style="display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap;"><span style="font-weight:700;white-space:nowrap;">' + esc(r.left) + " to run</span>" + (r.done > 0 ? '<span style="color:#64748b;font-weight:600;font-size:11px;white-space:nowrap;">(' + esc(r.done) + " of " + esc(r.total) + " done)</span>" : "")
-                + '<div style="width:70px;height:3px;flex:none;border-radius:2px;background:#e2e8f0;overflow:hidden;" role="progressbar" aria-valuemin="0" aria-valuemax="' + esc(r.total) + '" aria-valuenow="' + esc(r.done) + '" title="' + esc(r.done) + " of " + esc(r.total) + ' done"><div style="height:100%;width:' + (r.total ? Math.round((r.done / r.total) * 100) : 0) + '%;background:#10b981;"></div></div>'
+              return '<div style="display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap;">'
+                + '<span style="font-weight:700;white-space:nowrap;" title="' + esc(r.deckleTitle || "") + '">' + esc(r.done) + " / " + esc(r.total) + "</span>"
+                + '<div style="width:70px;height:7px;flex:none;border-radius:4px;background:#e2e8f0;overflow:hidden;" role="progressbar" aria-valuemin="0" aria-valuemax="' + esc(r.total) + '" aria-valuenow="' + esc(r.done) + '" title="' + esc(r.deckleTitle || "") + '"><div style="height:100%;width:' + (r.total ? Math.round((r.done / r.total) * 100) : 0) + '%;background:#10b981;"></div></div>'
                 + r.curing + "</div>";
             }
             return '<div>' + (r.status === "done"
@@ -722,7 +760,9 @@
                 : "To run") + r.curing + "</div>";
           }) },
         { title: "Slice", field: "slice", width: 90, headerSort: false,
-          formatter: html((r, v) => (v ? '<span style="font-weight:700;">' + esc(v) + "</span>" : "")) },
+          formatter: html((r, v) => (v
+            ? '<span style="font-weight:700;white-space:nowrap;" title="' + esc(r.sliceTitle || "") + '">' + esc(v) + "</span>"
+            : "")) },
         { title: "Actions", field: "actions", width: 200, hozAlign: "center", headerHozAlign: "center", headerSort: false, formatter: html((r, v) => v || "") },
       ],
     });
