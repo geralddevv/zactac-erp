@@ -29,7 +29,10 @@ import { fileURLToPath } from "url";
 //   --apply                 actually make changes
 //   --skip-backup           don't run mongodump (NOT advised; prints a warning)
 //   --skip-pull             leave git and npm alone (deploying by other means)
-//   --restart "<cmd>"       command that restarts the app, e.g. "pm2 restart sachiko".
+//   --restart "<cmd>"       command that restarts the app, run through the
+//                           shell: "pm2 restart sachiko",
+//                           "sudo systemctl restart sachiko",
+//                           "nssm restart Sachiko" (Windows service), ...
 //                           Omitted: pm2 is auto-detected; if that fails the
 //                           restart is left to you and the script says so.
 //   --backup-dir <path>     where mongodump writes (default ./backups/<date>)
@@ -54,6 +57,12 @@ const valueOf = (flag, fallback = "") => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : fallback;
 };
 
+/* Windows needs care here. git.exe, node.exe and mongodump.exe are real
+   executables and spawn directly, but npm and pm2 are .cmd wrappers -- and
+   Node refuses to execute a .cmd without a shell. Spawning them bare reports
+   "not on PATH" for tools that work perfectly from the command line. */
+const IS_WIN = process.platform === "win32";
+
 const APPLY = has("--apply");
 const SKIP_BACKUP = has("--skip-backup");
 const SKIP_PULL = has("--skip-pull");
@@ -65,6 +74,8 @@ const BACKUP_DIR = valueOf("--backup-dir", path.join(ROOT, "backups", new Date()
 const C = { red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m", blue: "\x1b[36m", dim: "\x1b[2m", bold: "\x1b[1m", off: "\x1b[0m" };
 const notes = [];
 const warnings = [];
+// Facts one step establishes and a later one needs.
+const state = { hasNpm: false };
 
 const say = (msg = "") => console.log(msg);
 const ok = (msg) => say(`  ${C.green}✓${C.off} ${msg}`);
@@ -80,8 +91,8 @@ const redact = (uri) => String(uri || "").replace(/\/\/[^@/]*@/, "//***:***@");
 class StepFailed extends Error {}
 const abort = (msg) => { throw new StepFailed(msg); };
 
-function run(cmd, args, { cwd = ROOT, quiet = false } = {}) {
-  const res = spawnSync(cmd, args, { cwd, encoding: "utf8", shell: false });
+function run(cmd, args, { cwd = ROOT, quiet = false, shell = false } = {}) {
+  const res = spawnSync(cmd, args, { cwd, encoding: "utf8", shell });
   if (!quiet && res.stdout?.trim()) say(res.stdout.trim().split("\n").map((l) => `    ${C.dim}${l}${C.off}`).join("\n"));
   if (res.error) return { ok: false, out: "", err: String(res.error.message) };
   const err = (res.stderr || "").trim();
@@ -89,7 +100,17 @@ function run(cmd, args, { cwd = ROOT, quiet = false } = {}) {
   return { ok: res.status === 0, out: (res.stdout || "").trim(), err, status: res.status };
 }
 
-const tool = (name) => spawnSync(name, ["--version"], { encoding: "utf8" }).status === 0;
+// PATH lookup twice over: directly, then through a shell. On Windows npm and
+// pm2 are .cmd wrappers that a bare spawn cannot run at all; elsewhere a
+// version manager's shim (nvm, asdf, volta) can be equally invisible. Either
+// way, reporting "not installed" for a tool the operator clearly has is worse
+// than useless, so ask the shell as well -- `where` on Windows, `command -v`
+// on everything else.
+function tool(name) {
+  if (spawnSync(name, ["--version"], { encoding: "utf8" }).status === 0) return true;
+  const probe = IS_WIN ? `where ${name}` : `command -v ${name}`;
+  return spawnSync(`${probe} >${IS_WIN ? "NUL" : "/dev/null"} 2>&1`, { shell: true }).status === 0;
+}
 
 /* ─── 1. preflight ───────────────────────────────────────────────────────── */
 
@@ -128,10 +149,26 @@ async function preflight() {
     ok(`timezone ${tz} (local day = ${new Date().toLocaleDateString("en-GB")})`);
   }
 
-  for (const [name, needed] of [["git", !SKIP_PULL], ["npm", !SKIP_PULL], ["mongodump", !SKIP_BACKUP]]) {
+  // git and mongodump are load-bearing: without them the pull or the backup
+  // cannot happen at all, so stop and say which flag skips that step.
+  for (const [name, needed, flag] of [["git", !SKIP_PULL, "--skip-pull"], ["mongodump", !SKIP_BACKUP, "--skip-backup"]]) {
     if (!needed) continue;
-    if (!tool(name)) abort(`${name} is not on PATH. Install it, or re-run with ${name === "mongodump" ? "--skip-backup" : "--skip-pull"}.`);
+    if (!tool(name)) {
+      abort(`${name} is not on PATH. Install it, or re-run with ${flag}.${
+        name === "mongodump" && IS_WIN
+          ? ' On Windows the database tools ship separately from the server -- look in "C:\\Program Files\\MongoDB\\Tools\\<version>\\bin", or install the MongoDB Database Tools.'
+          : ""}`);
+    }
     ok(`${name} present`);
+  }
+
+  // npm is NOT load-bearing for this release: it added no dependencies, so the
+  // install is belt-and-braces. Missing npm therefore downgrades that one step
+  // rather than stopping the deploy.
+  state.hasNpm = SKIP_PULL ? false : tool("npm");
+  if (!SKIP_PULL) {
+    if (state.hasNpm) ok("npm present");
+    else warn("npm is not on PATH, so the dependency install will be skipped. This release adds no new packages, so that is safe -- but if you ever deploy one that does, run your own install first.");
   }
 
   await connectDB();
@@ -204,7 +241,8 @@ function pullAndInstall() {
   if (!APPLY) {
     const fetched = run("git", ["fetch", "--dry-run", "origin", branch], { quiet: true });
     would(`git pull --ff-only origin ${branch}${fetched.err ? ` (remote has: ${fetched.err.split("\n").slice(-1)[0].trim()})` : ""}`);
-    would(fs.existsSync(path.join(ROOT, "package-lock.json")) ? "npm ci" : "npm install");
+    if (state.hasNpm) would(fs.existsSync(path.join(ROOT, "package-lock.json")) ? "npm ci" : "npm install");
+    else info("dependency install skipped (no npm; this release needs none)");
     return;
   }
 
@@ -212,10 +250,15 @@ function pullAndInstall() {
   if (!pull.ok) abort(`git pull failed (${pull.err || `exit ${pull.status}`}). Resolve it by hand — a deploy should never merge on its own.`);
   ok(`pulled origin/${branch}`);
 
+  if (!state.hasNpm) {
+    info("dependency install skipped (no npm; this release needs none)");
+    return;
+  }
   // No new dependencies came with this release, but a lockfile install keeps
-  // the server honest if anything else moved.
+  // the server honest if anything else moved. Through a shell on Windows,
+  // where npm is npm.cmd.
   const useCi = fs.existsSync(path.join(ROOT, "package-lock.json"));
-  const install = run("npm", useCi ? ["ci"] : ["install"], { quiet: true });
+  const install = run("npm", useCi ? ["ci"] : ["install"], { quiet: true, shell: IS_WIN });
   if (!install.ok) abort(`${useCi ? "npm ci" : "npm install"} failed: ${install.err || `exit ${install.status}`}`);
   ok(useCi ? "npm ci" : "npm install");
 }
@@ -271,16 +314,26 @@ async function fixDedupeIndex() {
 
 /* ─── 5. restart ─────────────────────────────────────────────────────────── */
 
+// Windows paths differ in case and slashes between what pm2 stored and what
+// path.resolve() produces here, so compare them normalised.
+const samePath = (a, b) => {
+  const norm = (p) => path.resolve(String(p || "")).replace(/\\/g, "/").replace(/\/+$/, "");
+  return IS_WIN ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+};
+
 function pm2Targets() {
   if (!tool("pm2")) return [];
-  const res = spawnSync("pm2", ["jlist"], { encoding: "utf8" });
+  // shell on Windows: pm2 is pm2.cmd and will not spawn bare.
+  const res = spawnSync("pm2", ["jlist"], { encoding: "utf8", shell: IS_WIN });
   if (res.status !== 0) return [];
   try {
-    return JSON.parse(res.stdout)
+    // pm2 prints logger noise before the JSON on some versions.
+    const json = res.stdout.slice(res.stdout.indexOf("["));
+    return JSON.parse(json)
       .filter((p) => {
         const script = p?.pm2_env?.pm_exec_path || "";
         const cwd = p?.pm2_env?.pm_cwd || "";
-        return script.endsWith("server.js") && (path.resolve(cwd) === ROOT || script.startsWith(ROOT));
+        return /server\.js$/i.test(script) && (samePath(cwd, ROOT) || samePath(path.dirname(script), ROOT));
       })
       .map((p) => p.name);
   } catch { return []; }
@@ -291,22 +344,27 @@ function restart() {
 
   if (RESTART_CMD) {
     if (!APPLY) { would(`run: ${RESTART_CMD}`); return true; }
-    const parts = RESTART_CMD.split(" ").filter(Boolean);
-    const res = run(parts[0], parts.slice(1));
-    if (!res.ok) abort(`restart command failed: ${RESTART_CMD}`);
+    // Handed to the shell whole, not split on spaces: it is a command line the
+    // operator wrote, so it may be "pm2 restart sachiko", "nssm restart
+    // Sachiko", "net stop … && net start …" or a quoted path.
+    const res = run(RESTART_CMD, [], { shell: true });
+    if (!res.ok) abort(`restart command failed: ${RESTART_CMD}${res.err ? ` — ${res.err}` : ""}`);
     ok(`ran: ${RESTART_CMD}`);
     return true;
   }
 
   const targets = pm2Targets();
   if (!targets.length) {
-    warn("could not work out how this app is run (no --restart given, no pm2 process for this directory). RESTART IT YOURSELF before the checks below mean anything.");
+    warn(`could not work out how this app is run (no --restart given, no pm2 process for this directory). RESTART IT YOURSELF before the checks below mean anything, or re-run with --restart "<command>" — ${
+      IS_WIN
+        ? 'on Windows that is usually "pm2 restart sachiko", "nssm restart Sachiko", or "net stop Sachiko && net start Sachiko" for a service'
+        : 'e.g. "pm2 restart sachiko" or "sudo systemctl restart sachiko"'}.`);
     notes.push("Restart was NOT automated — do it by hand, then re-run this script to verify.");
     return false;
   }
   if (!APPLY) { would(`pm2 restart ${targets.join(" ")} --update-env`); return true; }
   for (const name of targets) {
-    const res = run("pm2", ["restart", name, "--update-env"], { quiet: true });
+    const res = run("pm2", ["restart", name, "--update-env"], { quiet: true, shell: IS_WIN });
     if (!res.ok) abort(`pm2 restart ${name} failed`);
     ok(`pm2 restart ${name}`);
   }
