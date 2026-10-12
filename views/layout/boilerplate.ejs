@@ -307,6 +307,23 @@
         align-items: center;
       }
 
+      /* Notification bell (see NOTIFICATIONS.md) */
+      .notif-dropdown { position: relative; display: inline-block; }
+      #fdNotifBtn { position: relative; width: 32px; height: 32px; padding: 0; justify-content: center; font-size: 14px; }
+      .notif-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; box-sizing: border-box; display: none; }
+      .notif-badge.has-count { display: block; }
+      .notif-menu { position: absolute; top: calc(100% + 8px); right: 0; width: 340px; max-width: 92vw; background: #fff; border-radius: 12px; border: 1px solid rgba(4, 74, 120, 0.15); box-shadow: 0 10px 25px rgba(4, 74, 120, 0.18); opacity: 0; visibility: hidden; transform: translateY(-10px); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); z-index: 9999; }
+      .notif-menu.show { opacity: 1; visibility: visible; transform: translateY(0); }
+      .notif-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #f1f5f9; font-size: 14px; font-weight: 700; color: #044a78; }
+      .notif-list { max-height: min(60vh, 380px); overflow-y: auto; }
+      .notif-empty { padding: 28px 14px; text-align: center; color: #64748b; font-size: 13px; }
+      .notif-empty i { display: block; font-size: 26px; color: #cbd5e1; margin-bottom: 8px; }
+      .notif-item { display: flex; gap: 10px; padding: 10px 14px; color: #1e293b; text-decoration: none; font-size: 13px; border-bottom: 1px solid #f1f5f9; }
+      .notif-item:hover { background: #f0f7ff; }
+      .notif-item.unread { background: #e8f2fa; }
+      .notif-item .notif-title { font-weight: 600; }
+      .notif-item .notif-time { color: #64748b; font-size: 11px; }
+
       /* Premium Profile Button Style */
       #fdProfileBtn {
         height: 32px;
@@ -750,6 +767,18 @@
           <div class="ns-results" id="fdNavSearchResults"></div>
         </div>
         <% } %>
+        <div class="notif-dropdown">
+          <button type="button" class="header-nav" id="fdNotifBtn" title="Notifications" aria-label="Notifications" aria-haspopup="true">
+            <i class="fa-solid fa-bell"></i>
+            <span class="notif-badge" id="fdNotifBadge"></span>
+          </button>
+          <div class="notif-menu" id="fdNotifMenu">
+            <div class="notif-head">Notifications</div>
+            <div class="notif-list" id="fdNotifList">
+              <div class="notif-empty"><i class="fa-regular fa-bell-slash"></i>No notifications</div>
+            </div>
+          </div>
+        </div>
         <div class="profile-dropdown">
           <button type="button" id="fdProfileBtn" title="Profile">
             <div class="profile-avatar-circle">
@@ -1579,6 +1608,31 @@
             fdProfileMenu.classList.remove("show");
           }
         });
+      }
+
+      /* Notification Bell Logic (placeholder: no feed yet, see NOTIFICATIONS.md) */
+      const fdNotifBtn = document.getElementById("fdNotifBtn");
+      const fdNotifMenu = document.getElementById("fdNotifMenu");
+      if (fdNotifBtn && fdNotifMenu) {
+        fdNotifBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (fdProfileMenu) fdProfileMenu.classList.remove("show");
+          // One header dropdown at a time: opening notifications closes the
+          // search results (this handler stops propagation, so the search's
+          // own outside-click close never sees the click).
+          const nsBox = document.getElementById("fdNavSearchResults");
+          if (nsBox) nsBox.classList.remove("is-open");
+          const nsInput = document.getElementById("fdNavSearch");
+          if (nsInput && document.activeElement === nsInput) nsInput.blur();
+          fdNotifMenu.classList.toggle("show");
+        });
+        document.addEventListener("click", (e) => {
+          if (!fdNotifMenu.contains(e.target)) fdNotifMenu.classList.remove("show");
+        });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") fdNotifMenu.classList.remove("show");
+        });
+        if (fdProfileBtn) fdProfileBtn.addEventListener("click", () => fdNotifMenu.classList.remove("show"));
       }
 
       /* Password Modal Logic */

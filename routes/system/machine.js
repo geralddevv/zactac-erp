@@ -291,6 +291,16 @@ router.get("/machine/queue", requireMachineFloor, async (req, res) => {
       rollIds: job.allottedRollDetails.map((r) => r.rollId).filter(Boolean),
       clientName: job.clientName,
       advance: job.advance,
+      // What the laminator list spells out (as the slitting one does): lot,
+      // size, cut layout, how far the job has got, and whether it is running
+      // on the machine now ("running" = a deckle on the laminator; "setting",
+      // "paused" etc. come through liveStatus) plus the material verdict.
+      lotNo: job.lotNo,
+      paperSize: job.paperSize,
+      layoutSummary: job.layoutSummary || "",
+      deckleTarget: job.deckleTarget,
+      liveStatus: job.liveStatus || "",
+      materialStatus: job.materialStatus || "",
     });
   });
   // Every allocated (not yet fully run) Slitting Job Card, folded into the
@@ -308,6 +318,18 @@ router.get("/machine/queue", requireMachineFloor, async (req, res) => {
       producedRolls: job.producedRolls,
       rollIds: [],
       clientName: job.clientName,
+      // What the slitting machine list spells out (grouped by product + cut
+      // pattern there): the pattern, the lot, how far the card's Deckles have
+      // got and whether one of them is on the slitter right now.
+      lotNo: job.lotNo,
+      layoutKey: job.layoutKey || "",
+      layoutSummary: job.layoutSummary || "",
+      deckleCount: job.deckleCount,
+      deckleDone: job.deckleDone,
+      deckleLeft: job.deckleLeft,
+      plannedRolls: job.plannedRolls,
+      curing: !!job.curing,
+      running: (job.deckles || []).some((d) => d.running),
     });
   });
 
@@ -337,6 +359,10 @@ router.get("/machine/queue", requireMachineFloor, async (req, res) => {
       locationName: m.location?.locationName || "—",
       operatorName: operatorByProfileCodeAndLocation.get(key) || "—",
       pendingCount: jobs.length,
+      // Slitting list only (jobs there are cards): Deckles still to run across
+      // them, and whether any one is running.
+      deckleLeft: jobs.reduce((n, j) => n + (Number(j.deckleLeft) || 0), 0),
+      running: jobs.some((j) => j.running || j.liveStatus === "running"),
       jobs,
     };
   });
@@ -348,6 +374,7 @@ router.get("/machine/queue", requireMachineFloor, async (req, res) => {
     CSS: "tableDisp.css",
     JS: false,
     rows,
+    isSlitting,
     notification: req.flash("notification"),
   });
 });
@@ -904,6 +931,18 @@ export async function buildQueueRows(match) {
       // read by the operator API's /queue the same way, so a paused job reads
       // "Paused" on the tablet even when its local draft is gone.
       livePause: p.livePause?.since ? p.livePause : null,
+      // Where the job is on the floor, for the machine queue's Status column:
+      // "paused" outranks everything (as on the WIP tab), then a deckle on the
+      // machine now, then a Job Setting row, then merely played.
+      liveStatus: p.livePause?.since
+        ? "paused"
+        : p.liveRun?.startedAt
+          ? "running"
+          : p.liveSetting?.startedAt
+            ? "setting"
+            : p.liveStartedAt
+              ? "started"
+              : "",
       deckleTarget: deckleTarget != null ? deckleTarget : null,
       rolls: rolls != null ? String(rolls) : "—",
       allottedRolls: allottedRolls != null ? String(allottedRolls) : "—",

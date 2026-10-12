@@ -70,7 +70,12 @@
       : '<div class="ns-empty">No matching page</div>';
   }
 
-  function open() { render(); box.classList.add("is-open"); }
+  function open() {
+    // One header dropdown at a time: opening search closes the notification bell's.
+    document.getElementById("fdNotifMenu")?.classList.remove("show");
+    render();
+    box.classList.add("is-open");
+  }
   function close() { box.classList.remove("is-open"); }
 
   function setActive(i) {

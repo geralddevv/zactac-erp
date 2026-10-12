@@ -65,6 +65,23 @@
     #slit-queue-table .tabulator-data-tree-branch,
     #slit-queue-table .tabulator-data-tree-branch-empty { display: none !important; }
     #slit-queue-table .tabulator-row.sq-child { background-color: #f8fafc; }
+    /* Pending List (lamination queue) Tabulator: same sizing, buttons and row
+       tints as the Slitting Jobs table below. */
+    #pending-queue-table { width: 100%; height: 100%; flex: 1 1 auto; min-height: 260px; border-radius: 8px; overflow: hidden; }
+    #pending-queue-table .btn-action {
+      height: 24px; padding: 2px 10px; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+      font-size: 11px; transition: opacity 0.2s; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; text-decoration: none;
+    }
+    #pending-queue-table .btn-action:hover { opacity: 0.85; }
+    #pending-queue-table .btn-action.is-off { background: #9ca3af !important; cursor: not-allowed; opacity: 0.7; pointer-events: none; }
+    #pending-queue-table .tabulator-data-tree-branch { display: none !important; }
+    #pending-queue-table .tabulator-row.pq-match { background-color: #dcfce7 !important; }
+    #pending-queue-table .tabulator-row.pq-match:hover { background-color: #bbf7d0 !important; }
+    #pending-queue-table .tabulator-row.pq-short { background-color: #fee2e2 !important; }
+    #pending-queue-table .tabulator-row.pq-short:hover { background-color: #fecaca !important; }
+    #pending-queue-table .tabulator-row.pq-partial { background-color: #fff8e1 !important; }
+    #pending-queue-table .tabulator-row.pq-partial:hover { background-color: #fdf0c8 !important; }
+    #pending-queue-table .tabulator-cell.pq-pool { cursor: pointer; }
     #slit-queue-table .btn-action {
       height: 24px; padding: 2px 10px; color: #fff; border: none; border-radius: 4px; cursor: pointer;
       font-size: 11px; transition: opacity 0.2s; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; text-decoration: none;
@@ -257,155 +274,22 @@
        misleading, "No orders currently assigned" notice above the Slitting
        Jobs card that actually has this machine's real queue. -->
   <% if (machine.machineType !== "SLITTING") { %>
-  <div class="ap-card">
-    <div class="ap-card-title">
-      <span><i class="fa-solid fa-layer-group"></i> Pending List</span>
-      <span><%= rows.length %> order<%= rows.length === 1 ? "" : "s" %></span>
-    </div>
-
-    <% if (rows.length === 0) { %>
-      <div style="padding: 14px 16px;">
-        <div class="ap-notice">
-          <i class="fa-solid fa-circle-info"></i>
-          No orders currently assigned to this machine.
-        </div>
-      </div>
-    <% } else { %>
-      <div class="ap-table-wrap">
-        <table class="ap-table">
-          <%# The table runs table-layout: fixed with overflow:hidden cells, so
-              these widths are the last word -- anything that does not fit is
-              ellipsised rather than wrapping. Product Code gives 7% to
-              Required Rolls: a code is six or eight characters ("C001WB",
-              "C001WB-A") and had the widest column on the table, while
-              Required Rolls now carries the "material for 2 of 15" note on the
-              same line as its figure and was clipping it. Lot No is widened
-              again for the id's full width ("SP | LOT | 0042"), and Layout
-              (the Set Deckle cut pattern, row.layoutSummary) is new. Still
-              sums to 100. %>
-          <colgroup>
-            <col style="width: 15%" />
-            <col style="width: 9%" />
-            <col style="width: 7%" />
-            <col style="width: 12%" />
-            <col style="width: 13%" />
-            <col style="width: 8%" />
-            <col style="width: 8%" />
-            <col style="width: 8%" />
-            <col style="width: 8%" />
-            <col style="width: 12%" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>Lot No</th>
-              <th>Product Code</th>
-              <th>Paper Size</th>
-              <th>Layout</th>
-              <th>Required Rolls</th>
-              <th>Facestock</th>
-              <th>Adhesive</th>
-              <th>Release</th>
-              <th>Balance Rolls</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <%
-              // Facestock/Adhesive/Release Liner allotment, one badge per raw-
-              // material pool -- red (nothing of that pool allotted), yellow
-              // (DOUBLE FACESTOCK/DOUBLE RELEASE rollTypes have 2 layers per
-              // pool and only one is allotted), green (fully allotted). See
-              // buildQueueRows()'s facestockStatus/adhesiveStatus/releaseStatus
-              // in routes/system/machine.js. Clicking any of the 3 cells opens
-              // the same roll-allotment details dialog the old standalone
-              // "Allotted Items" column used to open (now folded into these).
-              const poolBadge = (status) => {
-                if (status === "none") return '<span style="color:#dc2626; font-weight:700;"><i class="fa-solid fa-triangle-exclamation"></i> Not allotted</span>';
-                if (status === "partial") return '<span style="color:#ca8a04; font-weight:700;"><i class="fa-solid fa-circle-half-stroke"></i> Partial</span>';
-                if (status === "full") return '<span style="color:#16a34a; font-weight:700;"><i class="fa-solid fa-check"></i> Allotted</span>';
-                return '<span style="color:#9ca3af;">—</span>';
-              };
-            %>
-            <% rows.forEach((row) => { %>
-              <tr class="<%= row.materialStatus === 'match' ? 'mq-row-match' : row.materialStatus === 'short' ? 'mq-row-short' : row.materialStatus === 'partial' ? 'mq-row-partial' : '' %><%= row.advance ? ' adv-tr' : '' %>">
-                <td data-label="Lot No" title="<%= row.lotNo %>"><%= row.lotNo %></td>
-                <td data-label="Product Code" title="<%= row.productCode %>"><%= row.productCode %><% if (row.advance) { %> <span class="adv-tag" title="<%= row.advance.rolls %> roll(s) set in advance — no sales order yet">ADVANCE</span><% } %></td>
-                <td data-label="Paper Size"><%= row.paperSize %></td>
-                <td data-label="Layout" title="<%= row.layoutSummary || 'No deckle layout was planned for this job' %>"><%= row.layoutSummary || "—" %></td>
-                <%
-                  // What the allotted reels will actually get through, under
-                  // the figure the job was assigned for. Only shown when the
-                  // two differ -- a fully covered job says nothing extra.
-                  const cov = row.coverage;
-                  const showCover = cov && cov.rolls != null && cov.target != null && cov.rolls < cov.target;
-                %>
-                <td data-label="Required Rolls">
-                  <%= row.rolls %>
-                  <% if (showCover) { %>
-                    <span class="mq-cover<%= cov.rolls === 0 ? ' is-none' : '' %>"
-                          title="<%= cov.rolls === 0
-                            ? 'The material allotted is not enough for even one roll' + (cov.worstLabel ? ' — ' + cov.worstLabel + ' is the short one' : '') + '.'
-                            : 'The allotted raw material runs out after ' + cov.rolls + ' of ' + cov.target + ' rolls' + (cov.worstLabel ? ' — ' + cov.worstLabel + ' is the short one' : '') + '. Re-open the assignment to top it up.' %>">
-                      <i class="fa-solid fa-triangle-exclamation"></i>
-                      material for <%= cov.rolls %> of <%= cov.target %>
-                    </span>
-                  <% } %>
-                </td>
-                <td class="mq-rolls-cell" data-label="Facestock" data-id="<%= row._id %>" onclick="openRollDetails(this.dataset.id)" title="View roll allotment details"><%- poolBadge(row.facestockStatus) %></td>
-                <td class="mq-rolls-cell" data-label="Adhesive" data-id="<%= row._id %>" onclick="openRollDetails(this.dataset.id)" title="View roll allotment details"><%- poolBadge(row.adhesiveStatus) %></td>
-                <td class="mq-rolls-cell" data-label="Release" data-id="<%= row._id %>" onclick="openRollDetails(this.dataset.id)" title="View roll allotment details"><%- poolBadge(row.releaseStatus) %></td>
-                <td data-label="Balance Rolls">
-                  <%= row.balanceRolls %><% if (Number(row.producedRolls) > 0) { %> <span style="color:#64748b;font-weight:600;font-size:11px;">(<%= row.producedRolls %> of <%= row.rolls %> done)</span><% } %>
-                </td>
-                <td>
-                  <div class="mq-actions">
-                    <%
-                      // Ready to start once every raw-material layer this SKU
-                      // needs is allotted -- i.e. the three badges left of
-                      // here are green (or an older-flow Deckle roll was
-                      // ticked on). Computed server-side as row.canStart, see
-                      // buildQueueRows in routes/system/machine.js, so this
-                      // button and the two job-card guards can't drift apart.
-                    %>
-                    <%# Starting a job is done in the mobile (operator) app only -- no Start button here. %>
-                    <%
-                      const canEditOrder = authUser && authUser.role !== "operator";
-                    %>
-                    <% if (canEditOrder) { %>
-                      <a href="/app/labels/production/assign/<%= row._id %>" class="mq-edit-btn" title="Edit this assignment" aria-label="Edit this assignment">
-                        <i class="fa-solid fa-pen"></i>
-                      </a>
-                      <%
-                        // Undo = take the job back off the machine (POST
-                        // /labels/production/unassign). Offered here because
-                        // this is where the job is looked at; row.canUndo is
-                        // decided server-side by the same facts that POST
-                        // refuses on, so a greyed button is never a surprise
-                        // and an offered one never bounces.
-                      %>
-                      <% if (row.canUndo) { %>
-                        <button type="button" class="mq-undo-btn"
-                          data-id="<%= row._id %>" data-lot="<%= row.lotNo %>" data-product="<%= row.productCode %>"
-                          onclick="requestUndo(this.dataset.id, this.dataset.lot, this.dataset.product)"
-                          title="Send this job back to Pending — it comes off this machine" aria-label="Undo this assignment">
-                          <i class="fa-solid fa-rotate-left"></i>
-                        </button>
-                      <% } else { %>
-                        <button type="button" class="mq-undo-btn mq-undo-disabled" disabled
-                          title="<%= row.undoBlockedReason %>" aria-label="Can't undo this assignment">
-                          <i class="fa-solid fa-rotate-left"></i>
-                        </button>
-                      <% } %>
-                    <% } %>
-                  </div>
-                </td>
-              </tr>
-            <% }) %>
-          </tbody>
-        </table>
-      </div>
-    <% } %>
+  <%# Same bar as the machine header above (.indi-head), then the queue as a
+      Tabulator -- one row per order, built in the script at the foot of the
+      page from #queue-rows-data. %>
+  <div class="indi-head" style="padding: 0.5rem 0.8rem;">
+    <h2 style="margin: 0; font-size: 1.3rem; font-weight: 600; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-layer-group"></i> Pending List</h2>
+    <span style="font-size: 1.1rem; font-weight: 600;"><%= rows.length %> order<%= rows.length === 1 ? "" : "s" %></span>
   </div>
+  <% if (rows.length === 0) { %>
+    <div class="ap-notice">
+      <i class="fa-solid fa-circle-info"></i>
+      No orders currently assigned to this machine.
+    </div>
+  <% } else { %>
+    <div id="pending-queue-table"></div>
+    <script id="pending-queue-flags" type="application/json"><%- safeJson({ canEdit: !!(authUser && authUser.role !== "operator") }) %></script>
+  <% } %>
   <% } %>
 
   <!-- Slitting jobs allocated to this machine (routes/system/slitting.js).
@@ -865,4 +749,99 @@
     table.on("dataTreeRowCollapsed", (row) => setChev(row, false));
   })();
 </script>
+
+<script>
+  // Pending List: one row per order on this machine.
+  (function () {
+    const mount = document.getElementById("pending-queue-table");
+    if (!mount) return;
+    const canEdit = !!JSON.parse(document.getElementById("pending-queue-flags").textContent).canEdit;
+    const esc = (v) => escapeHtml(v == null ? "" : String(v));
+    const muted = '<span style="color:#9ca3af;">—</span>';
+    const poolBadge = (status) => {
+      if (status === "none") return '<span style="color:#dc2626; font-weight:700;"><i class="fa-solid fa-triangle-exclamation"></i> Not allotted</span>';
+      if (status === "partial") return '<span style="color:#ca8a04; font-weight:700;"><i class="fa-solid fa-circle-half-stroke"></i> Partial</span>';
+      if (status === "full") return '<span style="color:#16a34a; font-weight:700;"><i class="fa-solid fa-check"></i> Allotted</span>';
+      return muted;
+    };
+    const rowClassOf = (r) => (r.materialStatus === "match" ? "pq-match" : r.materialStatus === "short" ? "pq-short" : r.materialStatus === "partial" ? "pq-partial" : "");
+
+    function actionsHtml(r) {
+      if (!canEdit) return "";
+      let h = '<div style="display:inline-flex; gap:6px;"><a href="/app/labels/production/assign/' + encodeURIComponent(r._id) + '" class="btn-action" style="background:#044a78;" title="Edit this assignment" aria-label="Edit this assignment"><i class="fa-solid fa-pen"></i> Edit</a>';
+      if (r.canUndo) {
+        h += '<button type="button" class="btn-action" style="background:#b91c1c;" data-id="' + esc(r._id) + '" data-lot="' + esc(r.lotNo) + '" data-product="' + esc(r.productCode) + '" onclick="requestUndo(this.dataset.id, this.dataset.lot, this.dataset.product)" title="Send this job back to Pending — it comes off this machine" aria-label="Undo this assignment"><i class="fa-solid fa-rotate-left"></i> Undo</button>';
+      } else {
+        h += '<span title="' + esc(r.undoBlockedReason) + '"><span class="btn-action is-off"><i class="fa-solid fa-rotate-left"></i> Undo</span></span>';
+      }
+      return h + "</div>";
+    }
+
+    const data = QUEUE_ROWS.map((r, i) => ({ ...r, sr: i + 1 }));
+    const poolCol = (title, field) => ({
+      title, field, widthGrow: 1, minWidth: 120, headerSort: false, cssClass: "pq-pool",
+      cellClick: (e, cell) => openRollDetails(cell.getRow().getData()._id),
+      tooltip: () => "View roll allotment details",
+      formatter: (cell) => poolBadge(cell.getValue()),
+    });
+    new Tabulator(mount, {
+      data,
+      layout: "fitColumns",
+      index: "_id",
+      columnDefaults: { vertAlign: "middle" },
+      placeholder: "No orders currently assigned to this machine.",
+      rowFormatter: (row) => {
+        const d = row.getData(), el = row.getElement();
+        const c = rowClassOf(d);
+        if (c) el.classList.add(c);
+        if (d.advance) el.classList.add("adv-row");
+      },
+      columns: [
+        { title: "Sr. No.", field: "sr", width: 70, hozAlign: "center", headerHozAlign: "center", headerSort: false },
+        { title: "Lot No", field: "lotNo", widthGrow: 1.5, minWidth: 140, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter lot...",
+          formatter: (cell) => '<span style="font-weight:700;">' + esc(cell.getValue() || "—") + "</span>" },
+        { title: "Product Code", field: "productCode", widthGrow: 1.3, minWidth: 150, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter code...",
+          formatter: (cell) => {
+            const r = cell.getRow().getData();
+            const tag = r.advance ? ' <span class="adv-tag" title="' + esc(r.advance.rolls) + ' roll(s) set in advance — no sales order yet">ADVANCE</span>' : "";
+            return '<span style="font-weight:700;">' + esc(cell.getValue() || "—") + "</span>" + tag;
+          } },
+        { title: "Paper Size", field: "paperSize", widthGrow: 0.9, minWidth: 100, headerSort: false,
+          formatter: (cell) => (cell.getValue() ? esc(cell.getValue()) : muted) },
+        { title: "Required Rolls", field: "rolls", widthGrow: 1.4, minWidth: 140, headerSort: false,
+          formatter: (cell) => {
+            const r = cell.getRow().getData(), cov = r.coverage;
+            let h = '<span style="font-weight:700;">' + esc(r.rolls) + "</span>";
+            if (cov && cov.rolls != null && cov.target != null && cov.rolls < cov.target) {
+              const tip = cov.rolls === 0
+                ? "The material allotted is not enough for even one roll" + (cov.worstLabel ? " — " + cov.worstLabel + " is the short one" : "") + "."
+                : "The allotted raw material runs out after " + cov.rolls + " of " + cov.target + " rolls" + (cov.worstLabel ? " — " + cov.worstLabel + " is the short one" : "") + ". Re-open the assignment to top it up.";
+              h += ' <span class="mq-cover' + (cov.rolls === 0 ? " is-none" : "") + '" title="' + esc(tip) + '"><i class="fa-solid fa-triangle-exclamation"></i> material for ' + esc(cov.rolls) + " of " + esc(cov.target) + "</span>";
+            }
+            return h;
+          } },
+        poolCol("Facestock", "facestockStatus"),
+        poolCol("Adhesive", "adhesiveStatus"),
+        poolCol("Release", "releaseStatus"),
+        { title: "Balance Rolls", field: "balanceRolls", widthGrow: 1.2, minWidth: 130, headerSort: false,
+          formatter: (cell) => {
+            const r = cell.getRow().getData();
+            return '<span style="font-weight:700;">' + esc(r.balanceRolls) + "</span>" + (Number(r.producedRolls) > 0 ? ' <span style="color:#64748b;font-weight:600;font-size:11px;">(' + esc(r.producedRolls) + " of " + esc(r.rolls) + " done)</span>" : "");
+          } },
+        { title: "Status", field: "liveStatus", widthGrow: 1, minWidth: 120, headerSort: false,
+          formatter: (cell) => {
+            const v = cell.getValue();
+            if (v === "running") return '<a href="/app/labels/production/pending?tab=wip" style="color:#15803d;font-weight:700;text-decoration:underline;" title="Open the WIP tab"><i class="fa-solid fa-circle-play"></i> Running</a>';
+            if (v === "setting") return '<span style="color:#b45309;font-weight:700;"><i class="fa-solid fa-gear"></i> Job Setting</span>';
+            if (v === "paused") return '<span style="color:#64748b;font-weight:700;"><i class="fa-solid fa-circle-pause"></i> Paused</span>';
+            if (v === "started") return '<span style="color:#044a78;font-weight:700;"><i class="fa-solid fa-flag-checkered"></i> Started</span>';
+            return '<span style="color:#9ca3af;">Not started</span>';
+          } },
+        { title: "Actions", field: "_actions", width: 170, hozAlign: "center", headerHozAlign: "center", headerSort: false,
+          formatter: (cell) => actionsHtml(cell.getRow().getData()) },
+      ],
+    });
+  })();
+</script>
+
 
