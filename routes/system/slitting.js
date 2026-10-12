@@ -450,9 +450,22 @@ export async function buildSlittingQueueRows(match) {
       operatorName: c.operatorName || "—",
       helperName: c.helperName || "—",
       layoutSummary,
+      // The cut pattern(s) alone, without the "× n" Deckle counts -- two cards
+      // cut to the same pattern share this key whatever their Deckle counts
+      // (the machine queue folds them into one expandable row).
+      layoutKey: [...layoutGroups.keys()].sort().join("  |  "),
       deckleCount: rows.length,
       deckleDone: done,
       deckleLeft: rows.length - done,
+      // Each Deckle's id and whether it has run -- additive, read only by the
+      // operator app's queue, which bundles same-layout cards into one tile and
+      // uses these to find which card a scanned Deckle belongs to.
+      deckles: rows.map((r) => ({
+        id: r.deckleId || "",
+        done: r.status === "done",
+        // On the slitter now (same test the WIP page uses for its live Deckle).
+        running: r.status !== "done" && !!r.startedAt,
+      })),
       // Rolls this card will produce once every row is run.
       plannedRolls: rows.reduce((n, r) => n + (Array.isArray(r.cuts) ? r.cuts.length : 0), 0),
       producedRolls: rows

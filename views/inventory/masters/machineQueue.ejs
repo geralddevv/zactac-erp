@@ -1,5 +1,7 @@
 <% layout('/layout/boilerplate') -%>
 
+<link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet" />
+
 <div class="contain mq-page" style="flex-direction: column; padding: 10px; gap: 14px;">
   <style>
     .mq-head h1 { font-size: 20px; color: #fff; margin: 0; }
@@ -29,6 +31,46 @@
     .ap-table th { background: #f8fafc; color: #044a78; font-weight: 700; }
     .ap-table td { color: #1f2a44; font-weight: 600; }
     .ap-table tbody tr:hover { background: #fbfdff; }
+
+
+    /* Slitting Jobs (grouped Tabulator): the app's standard Tabulator look
+       (tableDisp.css) with the same expand toggle as the Label Stock page. */
+    /* Full height like the other Tabulator pages: fills what is left of the
+       .contain column under the heading; scrolls inside the table. */
+    #slit-queue-table { width: 100%; height: 100%; flex: 1 1 auto; min-height: 260px; border-radius: 8px; overflow: hidden; }
+    /* Tabulator's own expand control is hidden: the arrow has a column of its
+       own (".sq-chev") and a click anywhere on a group row opens it. */
+    #slit-queue-table .tabulator-data-tree-control { display: none !important; }
+    #slit-queue-table .sq-chev {
+      width: 20px; height: 20px; border-radius: 4px; background: rgba(4, 74, 120, 0.1);
+      display: inline-flex; align-items: center; justify-content: center; transition: background-color 0.15s ease;
+    }
+    #slit-queue-table .sq-chev i { font-size: 11px; color: #044a78; transition: transform 0.2s ease; }
+    #slit-queue-table .sq-chev.is-open i { transform: rotate(90deg); }
+    #slit-queue-table .tabulator-row.sq-group:hover .sq-chev { background: rgba(4, 74, 120, 0.18); }
+    /* tableDisp.css forces cursor: default !important on row hover. */
+    /* The Deckle on the slitter now: green, as on the queue's "material matched" rows. */
+    #slit-queue-table .tabulator-row.sq-child.sq-running { background-color: #dcfce7 !important; }
+    #slit-queue-table .tabulator-row.sq-child.sq-running:hover { background-color: #bbf7d0 !important; }
+    /* A closed group with a Deckle running inside it: green too, so the job reads as live. */
+    #slit-queue-table .tabulator-row.sq-group.sq-running-group { background-color: #dcfce7 !important; }
+    #slit-queue-table .tabulator-row.sq-group.sq-running-group:hover { background-color: #bbf7d0 !important; }
+    /* "Running" tag beside the Deckle count (same line, no extra height): only while the group is closed (sq-running-group). */
+    #slit-queue-table .sq-run-badge { display: none; align-items: center; gap: 5px; margin-left: 10px; color: #15803d; font-weight: 700; white-space: nowrap; }
+    #slit-queue-table .sq-running-group .sq-run-badge { display: inline-flex; }
+    #slit-queue-table .tabulator-row.sq-running:hover,
+    #slit-queue-table .tabulator-row.sq-running:hover .tabulator-cell,
+    #slit-queue-table .tabulator-row.sq-group:hover,
+    #slit-queue-table .tabulator-row.sq-group:hover .tabulator-cell { cursor: pointer !important; }
+    #slit-queue-table .tabulator-data-tree-branch,
+    #slit-queue-table .tabulator-data-tree-branch-empty { display: none !important; }
+    #slit-queue-table .tabulator-row.sq-child { background-color: #f8fafc; }
+    #slit-queue-table .btn-action {
+      height: 24px; padding: 2px 10px; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+      font-size: 11px; transition: opacity 0.2s; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; text-decoration: none;
+    }
+    #slit-queue-table .btn-action:hover { opacity: 0.85; }
+    #slit-queue-table .btn-action.is-off { background: #9ca3af !important; cursor: not-allowed; opacity: 0.7; pointer-events: none; }
 
     .ap-notice {
       background: #fff8e1; border: 1px solid #f0c36d; color: #7a5b00; border-radius: 8px;
@@ -325,15 +367,7 @@
                       // buildQueueRows in routes/system/machine.js, so this
                       // button and the two job-card guards can't drift apart.
                     %>
-                    <% if (row.canStart) { %>
-                    <a href="/app/machine/jobcard/form?pendingId=<%= row._id %>" class="mq-start-btn" title="Initiate Production">
-                      <i class="fa-solid fa-play"></i> start
-                    </a>
-                    <% } else { %>
-                    <a href="javascript:void(0)" class="mq-start-btn mq-start-disabled" title="Allot every raw material to this order before starting production" aria-disabled="true">
-                      <i class="fa-solid fa-play"></i> start
-                    </a>
-                    <% } %>
+                    <%# Starting a job is done in the mobile (operator) app only -- no Start button here. %>
                     <%
                       const canEditOrder = authUser && authUser.role !== "operator";
                     %>
@@ -379,77 +413,18 @@
        rather than being forced into the lamination table's columns. -->
   <% const slitRows = (typeof slittingRows !== "undefined" && slittingRows) ? slittingRows : []; %>
   <% if (slitRows.length) { %>
-  <div class="ap-card">
-    <div class="ap-card-title">
-      <span><i class="fa-solid fa-scissors"></i> Slitting Jobs</span>
-      <span><%= slitRows.length %> card<%= slitRows.length === 1 ? "" : "s" %></span>
-    </div>
-    <div class="ap-table-wrap">
-      <table class="ap-table">
-        <colgroup>
-          <col style="width: 12%" /><col style="width: 16%" /><col style="width: 11%" />
-          <col style="width: 14%" /><col style="width: 13%" /><col style="width: 10%" /><col style="width: 12%" />
-          <col style="width: 12%" />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Slitting ID</th>
-            <th>Lot No</th>
-            <th>Product Code</th>
-            <th>Client</th>
-            <th>Layout</th>
-            <th>Deckles</th>
-            <th>Slice</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% slitRows.forEach((row) => { %>
-            <tr>
-              <td data-label="Slitting ID" title="<%= row.slittingJobCardId %>"><%= row.slittingJobCardId %></td>
-              <td data-label="Lot No"><%= row.lotNo %></td>
-              <td data-label="Product Code"><%= row.productCode %></td>
-              <td data-label="Client" title="<%= row.clientName %>"><%= row.clientName %></td>
-              <td data-label="Layout" title="<%= row.layoutSummary || 'No cut layout recorded for this card' %>"><%= row.layoutSummary || "—" %></td>
-              <td data-label="Deckles">
-                <%= row.deckleLeft %> to run
-                <% if (row.deckleDone > 0) { %><span style="color:#64748b;font-weight:600;font-size:11px;">(<%= row.deckleDone %> of <%= row.deckleCount %> done)</span><% } %>
-                <% if (row.curing) { %><br><span style="color:#b45309;font-weight:700;font-size:11px;"><i class="fa-solid fa-hourglass-half"></i> curing<% if (row.curingUntilLabel) { %> · ready <%= row.curingUntilLabel %><% } %></span><% } %>
-              </td>
-              <td data-label="Slice"><%= row.producedRolls %> of <%= row.plannedRolls %></td>
-              <td>
-                <div class="mq-actions">
-                  <a href="/app/slitting/jobcard/<%= row._id %>" class="mq-start-btn" title="<%= row.curing ? 'Deckle still curing — open to see when it is ready' : 'Open the Slitting Job Card' %>">
-                    <i class="fa-solid fa-play"></i> start
-                  </a>
-                  <% if (authUser && authUser.role !== "operator" && row.pendingProductionId && row.deckleStockId) { %>
-                    <a href="/app/slitting/allocate/<%= row.pendingProductionId %>?deckle=<%= row.deckleStockId %>" class="mq-edit-btn" title="Edit this allocation" aria-label="Edit this allocation">
-                      <i class="fa-solid fa-pen"></i>
-                    </a>
-                  <% } %>
-                  <% if (authUser && authUser.role !== "operator") { %>
-                    <% if (row.canUndo) { %>
-                      <button type="button" class="mq-undo-btn"
-                        data-id="<%= row._id %>" data-card="<%= row.slittingJobCardId %>" data-lot="<%= row.lotNo %>"
-                        onclick="requestSlitUndo(this.dataset.id, this.dataset.card, this.dataset.lot)"
-                        title="Undo this allocation — the Deckle goes back to the Slitting Queue" aria-label="Undo this allocation">
-                        <i class="fa-solid fa-rotate-left"></i>
-                      </button>
-                    <% } else { %>
-                      <button type="button" class="mq-undo-btn mq-undo-disabled" disabled
-                        title="<%= row.undoBlockedReason %>" aria-label="Can't undo this allocation">
-                        <i class="fa-solid fa-rotate-left"></i>
-                      </button>
-                    <% } %>
-                  <% } %>
-                </div>
-              </td>
-            </tr>
-          <% }) %>
-        </tbody>
-      </table>
-    </div>
+  <%# Same bar as the machine header above (.indi-head) so the edges line up
+      with it and the table, and the text is centred in the bar. %>
+  <div class="indi-head" style="padding: 0.5rem 0.8rem;">
+    <h2 style="margin: 0; font-size: 1.3rem; font-weight: 600; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-scissors"></i> Slitting Jobs</h2>
+    <span style="font-size: 1.1rem; font-weight: 600;"><%= slitRows.length %> card<%= slitRows.length === 1 ? "" : "s" %></span>
   </div>
+  <%# Cards cut to the same pattern for the same product are folded into one
+      row (Tabulator dataTree); expanding it lists every Deckle ID allocated,
+      under the card it belongs to. Built in the script at the foot of the page
+      from #slit-queue-data. The table sits outside the heading's card. %>
+  <div id="slit-queue-table"></div>
+  <script id="slit-queue-data" type="application/json"><%- safeJson({ rows: slitRows, canEdit: !!(authUser && authUser.role !== "operator") }) %></script>
   <% } %>
 </div>
 
@@ -715,3 +690,179 @@
     if (e.target.id === "slitUndoDialog") closeModal("slitUndoDialog");
   });
 </script>
+
+<script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
+<script>
+  // Slitting Jobs: one row per (product + cut pattern), Deckle IDs inside.
+  (function () {
+    const mount = document.getElementById("slit-queue-table");
+    if (!mount) return;
+    const DATA = JSON.parse(document.getElementById("slit-queue-data").textContent);
+    const cards = DATA.rows || [];
+    const canEdit = !!DATA.canEdit;
+    const esc = (v) => escapeHtml(v == null ? "" : String(v));
+    const uniq = (arr) => [...new Set(arr.filter((x) => x && x !== "—"))];
+    const joinShort = (arr, noun) => (arr.length <= 2 ? arr.join(", ") : arr.length + " " + noun) || "—";
+
+    function actionsHtml(c) {
+      // Starting is done in the mobile (operator) app only: no Start button here.
+      let h = '<div style="display:inline-flex; gap:6px;">';
+      if (canEdit && c.pendingProductionId && c.deckleStockId) {
+        h += '<a href="/app/slitting/allocate/' + encodeURIComponent(c.pendingProductionId) + "?deckle=" + encodeURIComponent(c.deckleStockId) + '" class="btn-action" style="background:#044a78;" title="Edit this allocation" aria-label="Edit this allocation"><i class="fa-solid fa-pen"></i> Edit</a>';
+      }
+      if (canEdit) {
+        if (c.canUndo) {
+          h += '<button type="button" class="btn-action" style="background:#b91c1c;" data-id="' + esc(c._id) + '" data-card="' + esc(c.slittingJobCardId) + '" data-lot="' + esc(c.lotNo) + '" onclick="requestSlitUndo(this.dataset.id, this.dataset.card, this.dataset.lot)" title="Undo this allocation — the Deckle goes back to the Slitting Queue" aria-label="Undo this allocation"><i class="fa-solid fa-rotate-left"></i> Undo</button>';
+        } else {
+          h += '<span title="' + esc(c.undoBlockedReason) + '"><span class="btn-action is-off"><i class="fa-solid fa-rotate-left"></i> Undo</span></span>';
+        }
+      }
+      return h + "</div>";
+    }
+    const curingHtml = (c) => c.curing
+      ? '<div style="color:#b45309;font-weight:700;font-size:11px;margin-top:3px;"><i class="fa-solid fa-hourglass-half"></i> curing' + (c.curingUntilLabel ? " · ready " + esc(c.curingUntilLabel) : "") + "</div>"
+      : "";
+
+    // Group in first-seen order.
+    const groups = new Map();
+    cards.forEach((c) => {
+      const key = c.productCode + "\u0000" + (c.layoutKey || "");
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    });
+
+    const tree = [];
+    let n = 0, srNo = 0;
+    groups.forEach((list) => {
+      const first = list[0];
+      const sr = ++srNo;
+      const multi = list.length > 1;
+      // Every Deckle of every card in the group, the one on the slitter now
+      // first (the rest keep card order).
+      const flat = [];
+      list.forEach((c) => {
+        const decks = Array.isArray(c.deckles) && c.deckles.length ? c.deckles : [{ id: "", done: false, running: false }];
+        decks.forEach((d) => flat.push({ c, d }));
+      });
+      flat.sort((x, y) => (y.d.running ? 1 : 0) - (x.d.running ? 1 : 0));
+      const seenCard = new Set();
+      const children = flat.map(({ c, d }) => {
+        const firstOfCard = !seenCard.has(c._id);
+        seenCard.add(c._id);
+        return {
+          id: "c" + (++n),
+          deckleId: d.id || "—",
+          slit: c.slittingJobCardId,
+          lot: c.lotNo,
+          product: c.productCode,
+          client: c.clientName,
+          layout: c.layoutSummary || "—",
+          status: d.done ? "done" : d.running ? "running" : "run",
+          curing: c.curing ? curingHtml(c) : "",
+          slice: "",
+          actions: multi && firstOfCard ? actionsHtml(c) : "",
+        };
+      });
+      const total = list.reduce((a, c) => a + c.deckleCount, 0);
+      const done = list.reduce((a, c) => a + c.deckleDone, 0);
+      const planned = list.reduce((a, c) => a + c.plannedRolls, 0);
+      const made = list.reduce((a, c) => a + c.producedRolls, 0);
+      tree.push({
+        id: "g" + (++n),
+        isGroup: true,
+        hasRunning: list.some((c) => (c.deckles || []).some((d) => d.running)),
+        sr: sr,
+        deckleId: total + " Deckle" + (total === 1 ? "" : "s"),
+        slit: joinShort(uniq(list.map((c) => c.slittingJobCardId)), "cards"),
+        lot: (() => { const n = uniq(list.map((c) => c.lotNo)).length; return n + (n === 1 ? " lot" : " lots"); })(),
+        product: first.productCode,
+        client: joinShort(uniq(list.map((c) => c.clientName)), "clients"),
+        layout: first.layoutKey || "—",
+        left: total - done,
+        done: done,
+        total: total,
+        curing: list.some((c) => c.curing) ? curingHtml(list.find((c) => c.curing)) : "",
+        slice: made + " of " + planned,
+        actions: multi ? "" : actionsHtml(first),
+        _children: children,
+      });
+    });
+
+    const html = (fn) => (cell) => fn(cell.getData(), cell.getValue());
+    const table = new Tabulator(mount, {
+      data: tree,
+      layout: "fitColumns",
+      dataTree: true,
+      dataTreeStartExpanded: false,
+      dataTreeChildIndent: 18,
+      index: "id",
+      columnDefaults: { vertAlign: "middle" },
+      rowFormatter: (row) => {
+        const d = row.getData(), el = row.getElement();
+        el.classList.add(d.isGroup ? "sq-group" : "sq-child");
+        if (d.status === "running") el.classList.add("sq-running");
+        if (d.isGroup) el.classList.toggle("sq-running-group", !!d.hasRunning && !row.isTreeExpanded());
+      },
+      dataTreeElementColumn: "deckleId",
+      placeholder: "No slitting jobs",
+      columns: [
+        { title: "", field: "_open", width: 44, hozAlign: "center", headerSort: false, resizable: false,
+          formatter: (cell) => (cell.getData().isGroup
+            ? '<span class="sq-chev' + (cell.getRow().isTreeExpanded() ? " is-open" : "") + '" aria-hidden="true"><i class="fa-solid fa-chevron-right"></i></span>'
+            : "") },
+        { title: "Sr. No.", field: "sr", width: 70, hozAlign: "center", headerHozAlign: "center", headerSort: false,
+          formatter: html((r, v) => (r.isGroup ? esc(v) : "")) },
+        { title: "Deckle ID", field: "deckleId", widthGrow: 1.6, minWidth: 170, headerSort: false,
+          formatter: html((r, v) => (r.isGroup
+            ? '<span style="font-weight:700;white-space:nowrap;">' + esc(v) + "</span>" + (r.hasRunning ? '<span class="sq-run-badge"><i class="fa-solid fa-circle-play"></i> Running</span>' : "")
+            : esc(v))) },
+        { title: "Lot Count", field: "lot", widthGrow: 0.8, minWidth: 100, headerSort: false,
+          formatter: html((r, v) => (!r.isGroup ? "" : v ? '<span style="font-weight:700;">' + esc(v) + "</span>" : '<span style="color:#9ca3af;">—</span>')) },
+        { title: "Product Code", field: "product", widthGrow: 0.9, minWidth: 110, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter code...",
+          formatter: html((r, v) => '<span style="font-weight:700;">' + esc(v || "N/A") + "</span>") },
+        { title: "Client", field: "client", widthGrow: 1.5, minWidth: 130, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter client...",
+          formatter: html((r, v) => (v && v !== "—" ? esc(v) : '<span style="color:#9ca3af;">—</span>')) },
+        { title: "Layout", field: "layout", widthGrow: 1.5, minWidth: 140, headerSort: false, headerFilter: "input", headerFilterPlaceholder: "Filter layout...",
+          formatter: html((r, v) => (v && v !== "—" ? esc(String(v).replace(/ \+ /g, " - ")) : '<span style="color:#9ca3af;">—</span>')) },
+        { title: "Deckles", field: "status", widthGrow: 1.2, minWidth: 130, headerSort: false,
+          formatter: html((r) => {
+            if (r.isGroup) {
+              return '<div style="display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap;"><span style="font-weight:700;white-space:nowrap;">' + esc(r.left) + " to run</span>" + (r.done > 0 ? '<span style="color:#64748b;font-weight:600;font-size:11px;white-space:nowrap;">(' + esc(r.done) + " of " + esc(r.total) + " done)</span>" : "")
+                + '<div style="width:70px;height:3px;flex:none;border-radius:2px;background:#e2e8f0;overflow:hidden;" role="progressbar" aria-valuemin="0" aria-valuemax="' + esc(r.total) + '" aria-valuenow="' + esc(r.done) + '" title="' + esc(r.done) + " of " + esc(r.total) + ' done"><div style="height:100%;width:' + (r.total ? Math.round((r.done / r.total) * 100) : 0) + '%;background:#10b981;"></div></div>'
+                + r.curing + "</div>";
+            }
+            return '<div>' + (r.status === "done"
+              ? '<span style="color:#16a34a;font-weight:700;"><i class="fa-solid fa-check"></i> Done</span>'
+              : r.status === "running"
+                ? '<a href="/app/slitting/wip" style="color:#15803d;font-weight:700;text-decoration:underline;" title="Open the Slitting WIP"><i class="fa-solid fa-circle-play"></i> Running</a>'
+                : "To run") + r.curing + "</div>";
+          }) },
+        { title: "Slice", field: "slice", width: 90, headerSort: false,
+          formatter: html((r, v) => (v ? '<span style="font-weight:700;">' + esc(v) + "</span>" : "")) },
+        { title: "Actions", field: "actions", width: 200, hozAlign: "center", headerHozAlign: "center", headerSort: false, formatter: html((r, v) => v || "") },
+      ],
+    });
+
+    // A click anywhere on a group row opens/closes it (not on its buttons).
+    // Tabulator 5 takes row events through table.on(), not as options.
+    table.on("rowClick", (e, row) => {
+      const d = row.getData();
+      if (e.target.closest("a, button, input, select, textarea")) return;
+      // The Deckle on the slitter now: a click opens the Slitting WIP.
+      if (d.status === "running") { window.location.href = "/app/slitting/wip"; return; }
+      if (!d.isGroup) return;
+      row.treeToggle();
+    });
+
+    // Keep the arrow in step with the row, however it was toggled.
+    const setChev = (row, open) => {
+      const chev = row.getElement().querySelector(".sq-chev");
+      if (chev) chev.classList.toggle("is-open", open);
+      // Open: the running Deckle's own row is green, so the group goes back to normal.
+      row.getElement().classList.toggle("sq-running-group", !!row.getData().hasRunning && !open);
+    };
+    table.on("dataTreeRowExpanded", (row) => setChev(row, true));
+    table.on("dataTreeRowCollapsed", (row) => setChev(row, false));
+  })();
+</script>
+
