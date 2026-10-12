@@ -1454,10 +1454,10 @@
     </div>
     <div class="lnd-body">
       <div class="lnd-note">
-        <strong>Temporary setup.</strong> Tell the ERP where each product's numbering stands this financial year. Leave a box blank if none has been used yet.
+        <strong>Temporary setup.</strong> Type the number each product is on <em>right now</em> this financial year &mdash; the next lot / deckle made gets exactly that number.
         <ul>
-          <li><strong>Last Lot No</strong> &mdash; the serial of the last lot used (<code>14</code> means <code>G014</code>, so the next lot is <code>G015</code>).</li>
-          <li><strong>Last Deckle</strong> &mdash; the serial of the last Deckle made, running across lots (<code>123</code> means <code>0123</code>, so the next is <code>0124</code>). Web job card and operator app both continue from it. A variant (<code>-A</code>, <code>-B</code>) isn't listed: it counts on its master's series, and only the product code in its Deckle ID differs.</li>
+          <li><strong>Current Lot No</strong> &mdash; the lot being used now (<code>14</code> means <code>G014</code>; this order's Lot No becomes <code>G014</code>, the next one <code>G015</code>).</li>
+          <li><strong>Current Deckle</strong> &mdash; the serial of the Deckle being made now, running across lots (<code>123</code> means <code>0123</code>; the next Deckle made is <code>0123</code>, then <code>0124</code>). Web job card and operator app both continue from it. A variant (<code>-A</code>, <code>-B</code>) isn't listed: it counts on its master's series, and only the product code in its Deckle ID differs.</li>
         </ul>
         Either can be moved forward later, never below a lot or Deckle the system already holds &mdash; unless <strong>Force override</strong> is ticked.
       </div>
@@ -1466,8 +1466,8 @@
         <span><strong>Force override</strong> &mdash; allow the last Lot No / Deckle No to be set <em>below</em> lots or Deckles already on file. The series is set exactly as typed and only lots / Deckles made from now on count toward it; existing ones are not changed or deleted, so a number can repeat across lots. Applies to the next Save only.</span>
       </label>
       <div class="lnd-preview" id="lnd-preview">
-        <span>Next Lot No: <b class="lnd-id is-next" id="lnd-pv-lot">&mdash;</b></span>
-        <span>Next Deckle ID: <b class="lnd-id is-next" id="lnd-pv-deckle">&mdash;</b></span>
+        <span>This Lot No: <b class="lnd-id is-next" id="lnd-pv-lot">&mdash;</b></span>
+        <span>This Deckle ID: <b class="lnd-id is-next" id="lnd-pv-deckle">&mdash;</b></span>
       </div>
       <div class="lnd-toolbar">
         <div class="lnd-search-wrap">
@@ -1480,10 +1480,10 @@
       <div class="lnd-card">
         <div class="lnd-hrow">
           <div>Product Code</div>
-          <div>Last Lot No (serial)</div>
-          <div class="lnd-col-next">Next Lot No</div>
-          <div>Last Deckle (serial)</div>
-          <div class="lnd-col-next">Next Deckle</div>
+          <div>Current Lot No (serial)</div>
+          <div class="lnd-col-next">Lot No</div>
+          <div>Current Deckle (serial)</div>
+          <div class="lnd-col-next">Deckle</div>
           <div></div>
         </div>
         <div class="lnd-scroll" id="lnd-body"></div>
@@ -1553,7 +1553,8 @@
       const isCurrent = d.code === CURRENT;
       const row = el("div", "lnd-row" + (isCurrent ? " is-current" : ""));
       row.dataset.code = d.code;
-      const init = { lot: d.lot.highest ? String(d.lot.highest) : "", deckle: d.deckle.highest ? String(d.deckle.highest) : "" };
+      // The boxes hold the CURRENT number (the one the next lot / deckle is minted with); the server stores "last used" = current - 1.
+      const init = { lot: String(Number(d.lot.highest) + 1), deckle: String(Number(d.deckle.highest) + 1) };
 
       const c1 = el("div");
       c1.appendChild(el("span", "lnd-code", d.code));
@@ -1561,8 +1562,8 @@
 
       function serialInput(value, label, max) {
         const i = el("input", "lnd-serial");
-        i.type = "number"; i.min = "0"; i.max = String(max); i.step = "1";
-        i.inputMode = "numeric"; i.placeholder = "0";
+        i.type = "number"; i.min = "1"; i.max = String(max); i.step = "1";
+        i.inputMode = "numeric"; i.placeholder = "1";
         i.value = value;
         i.setAttribute("aria-label", label + " for " + d.code);
         return i;
@@ -1586,7 +1587,7 @@
       function state() {
         const lv = lotIn.value.trim(), dv = deckleIn.value.trim();
         const lotDirty = lv !== init.lot, deckleDirty = dv !== init.deckle;
-        const lotOk = /^\d{1,6}$/.test(lv), deckleOk = /^\d{1,4}$/.test(dv) && Number(dv) <= 9999;
+        const lotOk = /^\d{1,6}$/.test(lv) && Number(lv) >= 1, deckleOk = /^\d{1,4}$/.test(dv) && Number(dv) >= 1 && Number(dv) <= 9999;
         return { lv: lv, dv: dv, lotDirty: lotDirty, deckleDirty: deckleDirty, lotOk: lotOk, deckleOk: deckleOk };
       }
       function refresh() {
@@ -1594,8 +1595,8 @@
         row.classList.toggle("is-dirty", st.lotDirty || st.deckleDirty);
         // Save wakes only when something changed and every changed box is valid.
         save.disabled = !((st.lotDirty || st.deckleDirty) && (!st.lotDirty || st.lotOk) && (!st.deckleDirty || st.deckleOk));
-        const lotSerial = st.lotDirty && st.lotOk ? Number(st.lv) + 1 : null;
-        const deckleSerial = st.deckleDirty && st.deckleOk && Number(st.dv) < 9999 ? Number(st.dv) + 1 : deckleNextDefault;
+        const lotSerial = st.lotDirty && st.lotOk ? Number(st.lv) : null;
+        const deckleSerial = st.deckleDirty && st.deckleOk ? Number(st.dv) : deckleNextDefault;
         lotNext.textContent = lotSerial !== null ? lotFor(d.code, lotSerial) : lotNextDefault;
         deckleNext.textContent = pad4(deckleSerial);
         if (isCurrent) {
@@ -1636,16 +1637,16 @@
       let chain = Promise.resolve();
       if (st.lotDirty) {
         chain = chain.then(function () {
-          return post(URL_LOT, { productCode: code, lastSerial: st.lv }).then(function (out) {
-            if (out.ok) { next.lot = out.j.row; notes.push("Lot No → " + out.j.row.next); lotSaved(code, out.j.row); }
+          return post(URL_LOT, { productCode: code, lastSerial: String(Number(st.lv) - 1) }).then(function (out) {
+            if (out.ok) { next.lot = out.j.row; notes.push("Lot No = " + out.j.row.next); lotSaved(code, out.j.row); }
             else errors.push("Lot No: " + (out.j.error || "failed"));
           });
         });
       }
       if (st.deckleDirty) {
         chain = chain.then(function () {
-          return post(URL_DECKLE, { productCode: code, lastSerial: st.dv }).then(function (out) {
-            if (out.ok) { next.deckle = out.j.row; notes.push("Deckle → " + out.j.row.next); }
+          return post(URL_DECKLE, { productCode: code, lastSerial: String(Number(st.dv) - 1) }).then(function (out) {
+            if (out.ok) { next.deckle = out.j.row; notes.push("Deckle = " + out.j.row.next); }
             else errors.push("Deckle: " + (out.j.error || "failed"));
           });
         });
@@ -1666,7 +1667,7 @@
           fresh.querySelectorAll(".lnd-serial")[0].dispatchEvent(new Event("input"));
         }
         if (!errors.length) forceBox.checked = false;
-        say((notes.length ? "Saved " + code + ": next " + notes.join(", next ") + ". " : "") + errors.join(" "), !errors.length);
+        say((notes.length ? "Saved " + code + ": " + notes.join(", ") + ". " : "") + errors.join(" "), !errors.length);
       }).catch(function (e) { say("Error: " + e.message, false); save.disabled = false; });
     }
 
