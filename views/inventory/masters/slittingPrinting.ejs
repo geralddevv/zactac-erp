@@ -1,0 +1,16 @@
+<% layout('/layout/boilerplate') -%>
+
+<!-- Scribe label-printing tool, framed in-app under the Slitting group so the
+     floor doesn't have to leave this app for it. Cross-origin (scribe.aimerz.in),
+     so server.js's CSP needs a frame-src entry for it -- see there if this ever
+     shows a blank frame instead of the site. -->
+
+<div class="contain" style="flex-direction: column; padding: 10px; gap: 10px">
+  <div class="table-spinner"><div class="spinner-circle"></div></div>
+
+  <iframe
+    src="https://www.scribe.aimerz.in"
+    title="Scribe Printing"
+    style="flex: 1 1 auto; min-height: 0; width: 100%; border: 1px solid #d6dbe1; border-radius: 0.5rem; background: #fff;"
+  ></iframe>
+</div>

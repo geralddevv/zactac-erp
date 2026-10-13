@@ -1458,6 +1458,18 @@ router.get("/slitting/wip", requireSlittingView, async (req, res) => {
   });
 });
 
+// Scribe (external label-printing tool) embedded in-app so the floor never
+// has to leave the Slitting group for it. Just a frame -- no data of ours
+// crosses into it.
+router.get("/slitting/printing", requireSlittingView, (req, res) => {
+  res.render("inventory/masters/slittingPrinting.ejs", {
+    title: "Slitting Printing",
+    CSS: false,
+    JS: false,
+    notification: req.flash("notification"),
+  });
+});
+
 // The 10 s reconcile poll -- the whole current row set (same builder as the
 // render), so the page can update, add and drop rows without a reload. Mirrors
 // GET /labels/production/wip-progress.

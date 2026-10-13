@@ -185,6 +185,8 @@ app.use((req, res, next) => {
         `media-src 'self' blob:`,
         `connect-src 'self' cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com`,
         `font-src 'self' cdn.jsdelivr.net https://cdnjs.cloudflare.com`,
+        // Scribe printing tool, framed in-app under Slitting > Printing.
+        `frame-src 'self' https://www.scribe.aimerz.in`,
         `object-src 'none'`,
       ].join("; ");
       res.setHeader("Content-Security-Policy", csp);
