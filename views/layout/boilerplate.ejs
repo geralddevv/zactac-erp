@@ -1001,10 +1001,17 @@
 
       /* The header is the one row that is not sunk, so it sits at the top of
          the recess rather than inside it -- marked by that step alone, plus
-         its weight. No plate, no rule under it. */
+         its weight, and a rule under it where its sub-pages open. */
       .nav-opt-wrap.is-open > .nav-items:first-child {
         background-color: rgba(0, 16, 30, 0.12);
         border-radius: 10px 10px 0 0;
+      }
+
+      /* Expanded nav only (.nav-panel-toggle = the 200px labelled nav; the
+         collapsed rail has no sub-pages). Beats the "no border-bottom" resets
+         above, which would otherwise erase this rule under an open header. */
+      .side-nav.nav-panel-toggle .nav-opt-wrap.is-open > .nav-items:first-child {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
       }
 
       .nav-opt-wrap.is-open > .nav-items:first-child .nav-items-para {
@@ -1144,8 +1151,7 @@
       }
 
       .nav-items:focus-visible {
-        outline: 2px solid var(--nav-accent);
-        outline-offset: -2px;
+        outline: none;
         background-color: rgba(255, 255, 255, 0.09);
       }
 
@@ -1154,7 +1160,6 @@
          brightest thing in the group. */
       .nav-items.active {
         background-color: rgba(0, 0, 0, 0.35);
-        border: 1px solid transparent;
       }
 
       .nav-items.active .nav-items-para {
@@ -1166,46 +1171,31 @@
         opacity: 1;
       }
 
-      /* The current page lights its segment of the guide, so the group reads
-         at a glance instead of being scanned for a highlighted row. */
+      /* The current page bolds its segment of the guide -- same left edge as
+         the hairline guide itself (not an offset marker beside it), just
+         thicker and lit, so it reads as that one line getting bold right
+         where the selected page is rather than a second line next to it.
+         Full-height and wider than a hairline on purpose: this is the
+         selected-tab indicator, so it should read as a bold bar, the way
+         Linear/Notion/GitHub-style side navs mark the current item, not as a
+         thin rule. */
+      /* The current page thickens its own segment of the guide: same left
+         edge and colour family as the hairline, just wider and lit, so the
+         line itself reads as bold where the selected page is. */
       .nav-labels-opt .nav-items.active::before {
         content: "";
         position: absolute;
-        left: var(--nav-indent);
-        top: 2px;
-        bottom: 2px;
-        width: 2px;
-        border-radius: 1px;
-        background-color: var(--nav-accent);
-      }
-
-      /* A standalone page (Dashboard, Maintenance, Tasks, Daybook) has no
-         guide to light, so its marker sits at its own left edge. */
-      .side-nav > .nav-items.active::before {
-        content: "";
-        position: absolute;
-        left: 0;
+        left: calc(var(--nav-indent) - 3px); /* 4px wide, centred on the 1px guide (the row's 1px border shifts it right by 1px) */
         top: 4px;
-        bottom: 4px;
-        width: 3px;
-        border-radius: 0 2px 2px 0;
-        background-color: var(--nav-accent);
+        bottom: 4px; /* inset, so the bare guide shows above and below, like a scroll thumb in its track */
+        width: 4px;
+        border-radius: 999px;
+        background-color: var(--nav-ink);
+        z-index: 1; /* above the hairline guide (z-index auto) */
       }
 
-      /* common.js marks the group the current page lives in. Without it a
-         shut group gives no clue that it holds the page you are on. */
-      .nav-opt-wrap.has-active > .nav-items::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 6px;
-        bottom: 6px;
-        width: 3px;
-        border-radius: 0 2px 2px 0;
-        background-color: var(--nav-accent);
-        opacity: 0.85;
-      }
-
+      /* No left accent bar on the current page or on its group: the
+         background tint and bold text below are the active indication. */
       .nav-opt-wrap.has-active:not(.is-open) > .nav-items {
         background-color: rgba(124, 196, 242, 0.12);
       }
@@ -1769,6 +1759,20 @@
       <!--- Loading Content --->
       <div class="page-content" id="pageContent"></div>
       <div class="main-content">
+        <% if (typeof breadcrumb !== 'undefined' && breadcrumb && breadcrumb.length) { %>
+        <nav class="page-breadcrumb" aria-label="Breadcrumb">
+          <% breadcrumb.forEach((crumb, i) => { %>
+            <% if (i > 0) { %><i class="fa-solid fa-chevron-right page-breadcrumb-sep"></i><% } %>
+            <% if (crumb.href) { %>
+              <a href="<%= crumb.href %>" class="page-breadcrumb-link"><%= crumb.label %></a>
+            <% } else if (i < breadcrumb.length - 1) { %>
+              <span class="page-breadcrumb-crumb"><%= crumb.label %></span>
+            <% } else { %>
+              <span class="page-breadcrumb-current"><%= crumb.label %></span>
+            <% } %>
+          <% }) %>
+        </nav>
+        <% } %>
         <%- body -%>
       </div>
     </div>

@@ -7546,6 +7546,11 @@ router.get("/vendor/profile/:id", async (req, res) => {
 
     res.render("users/vendorProfile.ejs", {
       title: "Vendor Profile",
+      breadcrumb: [
+        { label: "Purchase" },
+        { label: "Vendor List", href: "/app/vendor/view" },
+        { label: vendor.vendorName },
+      ],
       vendor,
       supplyCategories,
       supplyTotal: supplyRows.reduce((sum, rows) => sum + rows.length, 0),
@@ -7658,6 +7663,11 @@ router.get("/vendor/coordinator/details/:userId", async (req, res) => {
 
     res.render("users/vendorUserDetails.ejs", {
       title: "Vendor Coordinator Details",
+      breadcrumb: [
+        { label: "Purchase" },
+        { label: "Vendor Details", href: "/app/vendor/coordinator/view" },
+        { label: vendorUser.userName },
+      ],
       CSS: false,
       JS: false,
       vendorUser,

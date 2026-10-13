@@ -306,6 +306,45 @@ nav h1 {
   scrollbar-color: rgba(26, 26, 46, 0.75) transparent;
 }
 
+/* "You are here" strip for pages reached by drilling into a list (profile /
+   detail pages) that have no entry of their own in the side nav, so nothing
+   there highlights and there's no other sense of where the page sits. Only
+   rendered when the route passes a `breadcrumb` array -- see boilerplate.ejs. */
+.page-breadcrumb {
+  display: flex;
+  align-items: center;
+  /* Overrides the bare `nav { justify-content: center }` rules above and in
+     boilerplate.ejs's own <style> block -- both are type selectors, so a
+     class selector here beats them regardless of source order. */
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 20px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 13px;
+}
+.page-breadcrumb-link {
+  color: #044a78;
+  text-decoration: none;
+  font-weight: 600;
+}
+.page-breadcrumb-link:hover {
+  text-decoration: underline;
+}
+.page-breadcrumb-crumb {
+  color: #64748b;
+  font-weight: 600;
+}
+.page-breadcrumb-current {
+  color: #1a1a2e;
+  font-weight: 700;
+}
+.page-breadcrumb-sep {
+  color: #a0aec0;
+  font-size: 10px;
+}
+
 /* The hand-rolled tables (.ap-table-wrap) scroll inside their own card rather
    than through Tabulator, so tableDisp.css's ".tabulator .tabulator-tableholder"
    scrollbar never reached them and they fell back to the browser default.

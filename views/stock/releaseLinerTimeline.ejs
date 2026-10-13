@@ -55,6 +55,35 @@
     }
     .dialog-close-btn:hover { opacity: 1; }
     .dialog-body { padding: 18px; }
+    /* ---- Edit Reel dialog fields -- same look as the main stock page's own
+         Edit dialog (its copy of these rules lives inline in
+         views/stock/releaseLinerStock.ejs; kept in step by eye, not shared,
+         since the two pages don't share a stylesheet). ---- */
+    .dialog-field-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 8px;
+    }
+    .dialog-error {
+      color: #ef4444;
+      font-size: 12px;
+      margin-top: 5px;
+      display: none;
+    }
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .dialog-field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
     /* The preview IS the print target -- what's on screen here is what comes
        off the printer, one label per page, scrolled -- same as the main
        stock page's own Print Reel Labels dialog, just without its reel
@@ -310,6 +339,26 @@
     .tl-status-badge.in-stock { background: #dcfce7; color: #15803d; }
     .tl-status-badge.used { background: #e2e8f0; color: #475569; }
 
+    /* Sits beside the status badge on every entry -- same red/blue "needs
+       attention" vs. "already has an invoice" coloring the main stock
+       page's own .roll-edit-btn uses, so a reel flagged there reads the
+       same way here. Lives outside the <label>'s own click target (see
+       itemHtml) so tapping it can't also toggle the row's checkbox. */
+    .tl-edit-btn {
+      flex: 0 0 auto;
+      padding: 3px 10px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+      background: #044a78;
+    }
+    .tl-edit-btn:hover { background: #03365a; }
+    .tl-edit-btn.needs-invoice { background: #dc2626; }
+    .tl-edit-btn.needs-invoice:hover { background: #b91c1c; }
+
     .tl-empty {
       padding: 40px 18px;
       text-align: center;
@@ -385,6 +434,80 @@
   </div>
 </div>
 
+<!-- ============ EDIT RELEASE LINER REEL DIALOG ============ -->
+<!-- Same fields as the main stock page's own Edit dialog (routes/stock/
+     releaseLinerStock.js's PUT /:id, shared), plus the one field that
+     dialog doesn't offer: Roll ID itself -- fixing a mis-keyed id without
+     deleting and re-adding the whole reel. The spec (type/make/vendor/
+     vendor SKU code/color/size/gsm/sensing) is shown but not editable here
+     -- same as the main page, it travels back to the server unchanged off
+     this reel's own row data, since changing it is a re-inward, not a
+     correction. -->
+<div class="logout-modal" id="editReelDialog" aria-hidden="true">
+  <div class="logout-dialog" role="dialog" aria-modal="true" aria-labelledby="editReelDialogTitle"
+    style="width: min(520px, 95vw); padding: 0; border-radius: 14px;">
+    <div class="dialog-header" style="border-radius: 14px 14px 0 0;">
+      <h2 id="editReelDialogTitle">Edit Release Liner Reel</h2>
+      <button class="dialog-close-btn" type="button" onclick="closeEditReelDialog()" aria-label="Close">&times;</button>
+    </div>
+    <div class="dialog-body" style="border-radius: 0 0 14px 14px;">
+      <div style="margin-bottom: 16px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; font-weight: 600; color: #044a78;" id="editReelSpecSummary"></div>
+
+      <label class="dialog-field-label" for="editReelRollIdInput">
+        Roll ID
+        <span style="color: #dc2626; font-weight: 700;">&mdash; check this carefully before saving</span>
+      </label>
+      <input type="text" id="editReelRollIdInput" class="form-control premium-input" placeholder="Roll ID" style="margin-bottom: 12px;" />
+
+      <div class="dialog-field-row">
+        <div>
+          <label class="dialog-field-label" for="editReelLocationSelect">Location</label>
+          <select id="editReelLocationSelect" class="form-control premium-input">
+            <% (locations || []).forEach(function (loc) { %>
+              <option value="<%= loc.locationName %>"><%= loc.locationName %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div>
+          <label class="dialog-field-label" for="editReelDateInput">Date</label>
+          <input type="date" id="editReelDateInput" class="form-control premium-input" />
+        </div>
+      </div>
+
+      <div class="dialog-field-row">
+        <div>
+          <label class="dialog-field-label" for="editReelInvoiceNoInput">Invoice No</label>
+          <input type="text" id="editReelInvoiceNoInput" class="form-control premium-input" placeholder="Enter invoice no" />
+        </div>
+        <div>
+          <label class="dialog-field-label" for="editReelRateInput">Rate/Kg</label>
+          <input type="number" id="editReelRateInput" class="form-control premium-input" placeholder="Enter rate" min="0" step="any" />
+        </div>
+      </div>
+
+      <div class="dialog-field-row">
+        <div>
+          <label class="dialog-field-label" for="editReelVendorRollIdInput">Vendor Roll ID</label>
+          <input type="text" id="editReelVendorRollIdInput" class="form-control premium-input" placeholder="Vendor's own roll no" />
+        </div>
+        <div>
+          <label class="dialog-field-label" for="editReelKgInput">Kg</label>
+          <input type="number" id="editReelKgInput" class="form-control premium-input" placeholder="Enter Kg" min="0" step="any" />
+        </div>
+      </div>
+
+      <label class="dialog-field-label" for="editReelRemarksInput">Remarks</label>
+      <input type="text" id="editReelRemarksInput" class="form-control premium-input" placeholder="Optional remarks" />
+
+      <div id="editReelError" class="dialog-error"></div>
+      <div class="dialog-actions">
+        <button class="logout-btn" type="button" onclick="closeEditReelDialog()">Cancel</button>
+        <button class="logout-btn primary" type="button" id="editReelSubmitBtn" onclick="submitEditReel()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script id="timeline-data" type="application/json"><%- safeJson(rows) %></script>
 <script>
   // Every reel Release Liner has ever taken in, across every spec, newest
@@ -444,6 +567,9 @@
           <span class="tl-roll">${escapeHtml(r.rollId || "—")}</span>
           ${r.vendorRollId ? `<span class="tl-vendor-roll">(Vendor Roll ID: ${escapeHtml(r.vendorRollId)})</span>` : ""}
           <span class="tl-status-badge ${r.inStock ? "in-stock" : "used"}">${r.inStock ? "In Stock" : "Used"}</span>
+          <button type="button" class="tl-edit-btn${r.invoiceNo ? "" : " needs-invoice"}" data-edit-id="${escapeHtml(r._id)}">
+            <i class="fa-solid fa-pen"></i> Edit
+          </button>
           <span class="tl-spec">${escapeHtml(r.skuId || "—")}${specBits ? ` · ${escapeHtml(specBits)}` : ""}</span>
           <div class="tl-meta">${meta}</div>
           ${r.remarks ? `<div class="tl-remarks">${escapeHtml(r.remarks)}</div>` : ""}
@@ -588,6 +714,19 @@
   // The day's own Select All / Deselect All -- delegated, since every day
   // group (and its button) is (re)built by render(), not present at load.
   tlScroll.addEventListener("click", (e) => {
+    // Edit sits inside the row's own <label> (see itemHtml), which is what
+    // lets clicking anywhere in the row tick its checkbox -- caught and
+    // stopped here first, else the label would also toggle the checkbox
+    // underneath this click.
+    const editBtn = e.target.closest(".tl-edit-btn");
+    if (editBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const reel = timelineData.find((r) => r._id === editBtn.dataset.editId);
+      if (reel) openEditReelDialog(reel);
+      return;
+    }
+
     const btn = e.target.closest(".tl-day-select-btn");
     if (!btn) return;
     const group = btn.closest(".tl-day-group");
@@ -760,5 +899,135 @@
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (document.getElementById("printLabelsDialog").classList.contains("show")) closePrintLabelsDialog();
+  });
+
+  // ---- Edit Reel dialog --------------------------------------------------
+  // Same PUT /:id the main stock page's own Edit dialog uses, plus Roll ID
+  // itself (the one field that dialog leaves alone) -- see routes/stock/
+  // releaseLinerStock.js's buildEditPayload/validateEditPayload for why
+  // sending it is safe there (undefined = leave it alone) and why it's
+  // checked for a collision before saving.
+  function showError(elId, msg) {
+    const el = document.getElementById(elId);
+    el.textContent = msg;
+    el.style.display = "block";
+  }
+  function hideError(elId) {
+    document.getElementById(elId).style.display = "none";
+  }
+
+  // The reel's own spec fields (type/make/vendor/vendor SKU code/color/size/
+  // gsm/sensing) travel back to the server unchanged off this -- changing a
+  // reel's spec is a re-inward, not a correction, same stance the main
+  // stock page's own Edit dialog takes.
+  let editingReel = null;
+
+  function openEditReelDialog(reel) {
+    editingReel = reel;
+
+    const specBits = [
+      reel.type, reel.make, reel.vendorName, reel.vendorSkuCode, reel.sensing,
+      reel.color, reel.size ? `${reel.size} mm` : null, reel.gsm != null ? `${reel.gsm} GSM` : null,
+    ].filter(Boolean);
+    document.getElementById("editReelSpecSummary").textContent = specBits.join(" · ") || "—";
+
+    document.getElementById("editReelRollIdInput").value = reel.rollId || "";
+    document.getElementById("editReelLocationSelect").value = reel.location || "";
+    document.getElementById("editReelDateInput").value = reel.inwardDate ? new Date(reel.inwardDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    document.getElementById("editReelInvoiceNoInput").value = reel.invoiceNo || "";
+    document.getElementById("editReelRateInput").value = reel.rate != null ? reel.rate : "";
+    document.getElementById("editReelVendorRollIdInput").value = reel.vendorRollId || "";
+    document.getElementById("editReelKgInput").value = reel.reelMtrs != null ? reel.reelMtrs : "";
+    document.getElementById("editReelRemarksInput").value = reel.remarks || "";
+
+    hideError("editReelError");
+    openModal("editReelDialog");
+  }
+  function closeEditReelDialog() {
+    closeModal("editReelDialog");
+    editingReel = null;
+  }
+
+  async function submitEditReel() {
+    if (!editingReel) return;
+
+    const rollId = document.getElementById("editReelRollIdInput").value.trim();
+    if (!rollId) return showError("editReelError", "Roll ID is required.");
+
+    const location = document.getElementById("editReelLocationSelect").value;
+    if (!location) return showError("editReelError", "Location is required.");
+
+    const inwardDate = document.getElementById("editReelDateInput").value;
+    if (!inwardDate) return showError("editReelError", "Date is required.");
+
+    const rate = document.getElementById("editReelRateInput").value;
+    if (!rate || Number(rate) <= 0) return showError("editReelError", "Rate is required.");
+
+    const vendorRollId = document.getElementById("editReelVendorRollIdInput").value.trim();
+    if (!vendorRollId) return showError("editReelError", "Vendor Roll ID is required.");
+
+    const reelMtrs = document.getElementById("editReelKgInput").value;
+    if (!reelMtrs || Number(reelMtrs) <= 0) return showError("editReelError", "Kg is required.");
+
+    // Changing the Roll ID rewrites the one identifier printed on this
+    // reel's own sticker and quoted on its paperwork -- confirmed once here
+    // rather than only relying on the red hint text above the field, so a
+    // slip of the Enter key can't rename a reel unnoticed.
+    if (rollId !== (editingReel.rollId || "")) {
+      const ok = window.confirm(`Change Roll ID from "${editingReel.rollId || ""}" to "${rollId}"?\n\nThis is the id printed on the reel's sticker and quoted on its paperwork -- make sure it's correct before saving.`);
+      if (!ok) return;
+    }
+
+    hideError("editReelError");
+    setLoading("editReelSubmitBtn", true);
+    try {
+      const res = await fetch(`/app/releaselinerstock/${editingReel._id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rollId,
+          type: editingReel.type,
+          color: editingReel.color,
+          size: editingReel.size,
+          gsm: editingReel.gsm,
+          vendorId: editingReel.vendorId,
+          make: editingReel.make,
+          vendorSkuCode: editingReel.vendorSkuCode,
+          sensing: editingReel.sensing,
+          location,
+          inwardDate,
+          rate,
+          invoiceNo: document.getElementById("editReelInvoiceNoInput").value,
+          remarks: document.getElementById("editReelRemarksInput").value,
+          reelMtrs,
+          vendorRollId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeEditReelDialog();
+        // The edit can move a reel to a different day (Date changed) or
+        // change what the search/sort keys read -- simplest to reload
+        // rather than patch timelineData and re-run grouping/sorting by
+        // hand, and edits here are an occasional correction, not a
+        // frequent action worth optimizing away the round trip for.
+        showToast("Reel updated.", "success");
+        window.location.reload();
+      } else {
+        showError("editReelError", data.message || "Failed to update release liner reel.");
+      }
+    } catch {
+      showError("editReelError", "Server error. Please try again.");
+    } finally {
+      setLoading("editReelSubmitBtn", false);
+    }
+  }
+
+  document.getElementById("editReelDialog").addEventListener("click", function (e) {
+    if (e.target === this) closeEditReelDialog();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (document.getElementById("editReelDialog").classList.contains("show")) closeEditReelDialog();
   });
 </script>

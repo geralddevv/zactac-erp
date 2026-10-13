@@ -94,13 +94,22 @@ function buildRollPayload(raw) {
 // payload, same shape as the pre-batch /create used.
 async function buildEditPayload(body) {
   const header = await buildHeaderPayload(body);
-  return { ...header, ...buildRollPayload(body) };
+  const payload = { ...header, ...buildRollPayload(body) };
+  // Roll ID is only editable from the Inward Timeline's Edit dialog (fixing
+  // a mis-keyed id without deleting and re-adding the whole reel) -- the
+  // main stock page's own Edit dialog never sends this key, so `undefined`
+  // here means "leave the id alone", not "clear it".
+  if (body.rollId !== undefined) {
+    payload.rollId = String(body.rollId || "").trim().toUpperCase();
+  }
+  return payload;
 }
 
 function validateEditPayload(payload) {
   const headerError = validateHeaderPayload(payload);
   if (headerError) return headerError;
   if (!payload.reelMtrs || payload.reelMtrs <= 0) return "Kg is required.";
+  if (payload.rollId !== undefined && !payload.rollId) return "Roll ID is required.";
   return null;
 }
 
@@ -446,9 +455,10 @@ router.get("/figures", async (req, res) => {
 // when stock arrived, a reel already used up included, so it reads as a real
 // history rather than "what's currently in stock, dated".
 router.get("/timeline", async (req, res) => {
-  const [stock, masters] = await Promise.all([
+  const [stock, masters, locations] = await Promise.all([
     ReleaseLinerStock.find().lean(),
     ReleaseMaster.find().select("skuId type color size gsm vendorId make vendorSkuCode").lean(),
+    Location.find().sort({ locationName: 1 }).lean(),
   ]);
 
   // Same grouping key loadMastersWithStock uses to line a reel up with its
@@ -463,6 +473,7 @@ router.get("/timeline", async (req, res) => {
       vendorRollId: s.vendorRollId || "",
       skuId: skuIdByKey.get(releaseSpecKey(s)) || "",
       type: s.type || "",
+      vendorId: s.vendorId ? String(s.vendorId) : "",
       vendorName: s.vendorName || "",
       vendorSkuCode: s.vendorSkuCode || "",
       make: s.make || "",
@@ -491,6 +502,7 @@ router.get("/timeline", async (req, res) => {
     CSS: "tableDisp.css",
     title: "Release Liner — Inward Timeline",
     rows,
+    locations,
     // Sizes the Print dialog's preview frame to the real sticker -- same
     // values the main stock page's own Print Reel Labels dialog uses.
     labelSizeMm: { width: LABEL_WIDTH_MM, height: LABEL_HEIGHT_MM },
@@ -778,6 +790,11 @@ router.get("/labels", requireAuth, async (req, res) => {
 
 router.put("/:id", requireAuth, updateLimiter, async (req, res) => {
   try {
+    const existing = await ReleaseLinerStock.findById(req.params.id).select("rollId").lean();
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Release liner stock reel not found." });
+    }
+
     const payload = await buildEditPayload(req.body);
     const error = validateEditPayload(payload);
     if (error) return res.status(400).json({ success: false, message: error });
@@ -787,16 +804,30 @@ router.put("/:id", requireAuth, updateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid location." });
     }
 
+    // Roll ID carries a unique index, but checked explicitly here (rather
+    // than just letting the write hit it) so a renamed-onto-a-duplicate-id
+    // mistake comes back as a clear 400 naming the clash, not a raw Mongo
+    // duplicate-key error.
+    if (payload.rollId && payload.rollId !== existing.rollId) {
+      const dupe = await ReleaseLinerStock.exists({ rollId: payload.rollId, _id: { $ne: req.params.id } });
+      if (dupe) {
+        return res.status(400).json({ success: false, message: `Roll ID "${payload.rollId}" is already used by another reel.` });
+      }
+    }
+
     const updated = await ReleaseLinerStock.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: true });
     if (!updated) {
       return res.status(404).json({ success: false, message: "Release liner stock reel not found." });
     }
 
-    res.locals.auditDescription = `Updated release liner stock reel "${updated.rollId}"`;
-    res.json({ success: true });
+    res.locals.auditDescription = payload.rollId && payload.rollId !== existing.rollId
+      ? `Updated release liner stock reel "${existing.rollId}" (renamed to "${updated.rollId}")`
+      : `Updated release liner stock reel "${updated.rollId}"`;
+    res.json({ success: true, rollId: updated.rollId });
   } catch (err) {
     console.error("RELEASE LINER STOCK UPDATE ERROR:", err);
-    res.status(400).json({ success: false, message: "Failed to update release liner stock." });
+    const msg = err.code === 11000 ? "Roll ID already in use by another reel." : "Failed to update release liner stock.";
+    res.status(400).json({ success: false, message: msg });
   }
 });
 

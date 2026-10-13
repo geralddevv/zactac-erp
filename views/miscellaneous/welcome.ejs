@@ -9,6 +9,7 @@
 <script id="dash-flags" type="application/json"><%- safeJson(dashFlags || {}) %></script>
 <script id="dash-user" type="application/json"><%- safeJson({ name: (authUser && (authUser.empName || authUser.username)) || 'there', role: authUser && authUser.role }) %></script>
 
+<div class="table-spinner"><div class="spinner-circle"></div></div>
 <div class="dash">
     <!-- Hero -->
     <section class="dash-hero">

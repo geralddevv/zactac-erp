@@ -390,6 +390,11 @@ router.get("/profile/:id", async (req, res) => {
 
     res.render("users/clientProfile.ejs", {
       title: "Client Profile",
+      breadcrumb: [
+        { label: "Client" },
+        { label: "Client List", href: "/app/client/view" },
+        { label: client.clientName },
+      ],
       clientRec: client,
       CSS: false,
       JS: false,
@@ -450,6 +455,11 @@ router.get("/details/:userId", async (req, res) => {
 
     res.render("users/clientDetails.ejs", {
       title: "User Details",
+      breadcrumb: [
+        { label: "Client" },
+        { label: "Client Data", href: "/app/master/view" },
+        { label: userData.userName },
+      ],
       CSS: false,
       JS: false,
       userData,

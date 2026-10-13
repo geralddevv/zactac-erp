@@ -329,7 +329,19 @@ router.get("/profile/:id", async (req, res) => {
     Advance.findOne({ employee: req.params.id }).lean(),
   ]);
 
-  res.render("hr/employeeView.ejs", { employee, loan, advance, title: "Employee Profile", CSS: false, JS: false });
+  res.render("hr/employeeView.ejs", {
+    employee,
+    loan,
+    advance,
+    title: "Employee Profile",
+    breadcrumb: [
+      { label: "HR" },
+      { label: "Employee", href: "/app/employee/view" },
+      { label: employee.empName },
+    ],
+    CSS: false,
+    JS: false,
+  });
 });
 
 /* ================= FETCH EMPLOYEE JSON ================= */
