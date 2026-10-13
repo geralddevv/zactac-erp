@@ -990,7 +990,7 @@
       .nav-opt-wrap.is-open {
         background-color: rgba(0, 16, 30, 0.42);
         border-radius: 10px;
-        margin: 6px 0;
+        margin: 0 0 6px;
       }
 
       /* The air around the panel is the separator here; the hairline between
@@ -1063,19 +1063,6 @@
       /* The watermark brings its own top border. */
       .side-nav > *:has(+ .side-nav-watermark)::after {
         display: none;
-      }
-
-      /* Inside a group the pages get a fainter line, starting at the indent
-         so it belongs to the tree rather than cutting across the guide. The
-         first page needs none: the header plate above it is the boundary. */
-      .nav-labels-opt .nav-items + .nav-items::after {
-        content: "";
-        position: absolute;
-        left: 30px;
-        right: 8px;
-        top: -2px;
-        height: 1px;
-        background-color: rgba(255, 255, 255, 0.1);
       }
 
       /* ---- level 2: the group's pages, hanging off the indent guide ---- */
@@ -1166,7 +1153,7 @@
          a little more accent than it would on bare background to stay the
          brightest thing in the group. */
       .nav-items.active {
-        background-color: rgba(124, 196, 242, 0.22);
+        background-color: rgba(0, 0, 0, 0.35);
         border: 1px solid transparent;
       }
 

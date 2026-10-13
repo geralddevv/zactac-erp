@@ -318,15 +318,10 @@
     .kpi-sub.good { color: #067647; }
     .kpi-sub.mute { color: var(--dash-faint); }
 
-    /* Category accents -- soft, consistent tints; colour aids scanning, never shouts. */
-    .acc-blue   .kpi-icon { background: #e9f1fb; color: #1366c4; }
-    .acc-indigo .kpi-icon { background: #ecebfb; color: #5a52c9; }
-    .acc-green  .kpi-icon { background: #e6f5ec; color: #0c9b55; }
-    .acc-teal   .kpi-icon { background: #e2f4f2; color: #0f766e; }
-    .acc-amber  .kpi-icon { background: #fbf0db; color: #b4690e; }
-    .acc-violet .kpi-icon { background: #f3e9fb; color: #8a3cc0; }
-    .acc-slate  .kpi-icon { background: #eef1f6; color: #51657a; }
-    .acc-red    .kpi-icon { background: #fde7e7; color: #d92d20; }
+    /* Icons are monochrome: every tile's glyph uses the app's accent blue
+       (--primary-color, #044a78) on a pale tint of it. The acc-* class still
+       sits on each tile, but it no longer changes the icon colour. */
+    .kpi-icon { background: rgba(4, 74, 120, 0.08); color: var(--dash-navy); }
 
     /* skeleton */
     .kpi-tile.is-skeleton { pointer-events: none; box-shadow: none; }
@@ -565,7 +560,7 @@
             if (k.ordersAwaiting != null)
                 tiles.push(tile({ icon: "fa-solid fa-hourglass-half", accent: "blue", value: nf(k.ordersAwaiting), label: "Awaiting assignment", href: "/app/labels/production/deckle-set" }));
             if (k.finishedRolls != null)
-                tiles.push(tile({ icon: "fa-solid fa-box", accent: "green", value: nf(k.finishedRolls), label: "Finished rolls in stock", sub: k.finishedMtrs != null ? nf(k.finishedMtrs) + " m" : null, href: "/app/finishedstock" }));
+                tiles.push(tile({ icon: "fa-solid fa-box", accent: "green", value: nf(k.finishedRolls), label: "Finished rolls", sub: k.finishedMtrs != null ? nf(k.finishedMtrs) + " m" : null, href: "/app/finishedstock" }));
             if (k.facestock)
                 tiles.push(tile({ icon: "fa-solid fa-layer-group", accent: "green", value: nf(k.facestock.units), label: "Facestock reels", sub: nf(k.facestock.kg) + " kg", href: "/app/facestockstock" }));
             if (k.adhesive)
