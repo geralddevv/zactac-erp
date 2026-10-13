@@ -102,6 +102,15 @@ async function buildEditPayload(body) {
   if (body.rollId !== undefined) {
     payload.rollId = String(body.rollId || "").trim().toUpperCase();
   }
+  // A reel Label Stock Production emptied is left on file at quantity: 0,
+  // reelMtrs: 0 (see produceDeckle in utils/labelStockProduction.js) -- the
+  // Stock page/timeline filter those out of "current stock" entirely. The
+  // Edit dialog can't actually save a reel over at reelMtrs: 0 anyway
+  // (validateEditPayload below requires Kg > 0), so an edit that passes
+  // validation is always asserting "this reel is physically present with
+  // this Kg" -- restoring quantity to 1 is what makes that reel show up
+  // again on the Stock page instead of silently saving a Kg nobody can see.
+  payload.quantity = 1;
   return payload;
 }
 
@@ -838,25 +847,21 @@ router.delete("/:id", requireAuth, deleteLimiter, async (req, res) => {
       return res.status(404).json({ success: false, message: "Release liner stock reel not found." });
     }
 
-    // A reel that is only ALLOTTED (reserved for an order, not drawn on) may be
-    // removed: it is released from that order's allotment first, so nothing is
-    // left pointing at a reel that no longer exists. One already used on a job
-    // card (or live on a machine) can't go -- its recorded usage would dangle.
-    // The page's Remove button only mirrors this; the check is re-read here
-    // because a reel can be started on between the page load and the click.
+    // Removable whatever its status -- allotted, in use on a job card, even
+    // live on a machine. If it's only ALLOTTED (reserved for an order, not
+    // drawn on), it's released from that order's allotment first, so
+    // nothing is left pointing at a reel that no longer exists; a reel
+    // already used/live is removed as-is (its recorded usage stays on the
+    // job card as history -- a stockId that no longer resolves, same as any
+    // other record of a deleted thing).
     const { allottedByReel, usedByReel } = await loadReleaseReelUsage();
     const key = String(existing._id);
-    if (usedByReel.has(key)) {
-      return res.status(409).json({
-        success: false,
-        message: "This reel is already in use on a job card, so it can't be removed.",
-      });
-    }
+    const wasUsed = usedByReel.has(key);
     const released = allottedByReel.has(key) ? await unallotReel("release", key) : [];
 
     await existing.deleteOne();
-    res.locals.auditDescription = `Deleted release liner stock reel "${existing.rollId}"${released.length ? ` (un-allotted from ${released.join(", ")})` : ""}`;
-    res.json({ success: true, released });
+    res.locals.auditDescription = `Deleted release liner stock reel "${existing.rollId}"${released.length ? ` (un-allotted from ${released.join(", ")})` : ""}${wasUsed ? " (was already in use on a job card)" : ""}`;
+    res.json({ success: true, released, wasUsed });
   } catch (err) {
     console.error("RELEASE LINER STOCK DELETE ERROR:", err);
     res.status(500).json({ success: false, message: "Failed to delete release liner stock." });

@@ -351,9 +351,10 @@
       border-color: #dc2626;
       color: #fff;
     }
-    /* A reel that's allotted to an order or already drawn on can't be
-       removed (the server refuses it too) -- shown greyed with the reason in
-       its tooltip rather than hidden, so it's clear why it isn't offered. */
+    /* Not currently used -- Remove is never disabled now (any reel can be
+       removed whatever its status; see openRemoveRollDialog's warning
+       instead) -- kept in case a future state needs to grey the button out
+       again. */
     .roll-remove-btn:disabled {
       border-color: #e2e8f0;
       color: #94a3b8;
@@ -1416,20 +1417,20 @@
       printBtn.addEventListener("click", () => openLabelDialog(data));
       bar.insertBefore(printBtn, editBtn.nextSibling);
       // Remove this reel from stock -- for an inward keyed in by mistake
-      // (wrong spec, duplicated reel, reel that never physically arrived).
-      // Blocked once the reel is spoken for: deleting it would leave an
-      // order's allotment, or a job card's recorded usage, pointing at a
-      // reel that no longer exists.
+      // (wrong spec, duplicated reel, reel that never physically arrived),
+      // or simply to take a reel off the books whatever its status.
+      // Removable regardless -- allotted, used, even live on a machine
+      // (routes/stock/releaseLinerStock.js's DELETE /:id no longer blocks
+      // on usage, only releases the allotment first so nothing dangles);
+      // the dialog warns rather than refusing.
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "roll-remove-btn";
-      const blockedReason = data.usedBy
-        ? "Already in use / drawn on by a job card -- it can't be removed."
-        : "";
-      removeBtn.disabled = Boolean(blockedReason);
-      removeBtn.title = blockedReason || (data.allottedTo
-        ? "Remove this reel from stock -- it is allotted to an order and will be released from it"
-        : "Remove this reel from stock");
+      removeBtn.title = data.usedBy
+        ? "Already in use / drawn on by a job card -- remove anyway"
+        : (data.allottedTo
+          ? "Remove this reel from stock -- it is allotted to an order and will be released from it"
+          : "Remove this reel from stock");
       removeBtn.innerHTML = '<i class="fa-solid fa-trash"></i> Remove';
       removeBtn.addEventListener("click", () => openRemoveRollDialog(data, findMasterForRoll(data._id)));
       bar.insertBefore(removeBtn, printBtn.nextSibling);
@@ -2668,7 +2669,12 @@
   function openRemoveRollDialog(reel, master) {
     removingRollId = reel._id;
     const allotWarn = document.getElementById("removeRollAllotWarn");
-    if (reel.allottedTo) {
+    if (reel.usedBy) {
+      allotWarn.textContent = reel.usedBy.live
+        ? "This reel is scanned and live on a machine right now. Removing it leaves that job card's run pointing at a reel that no longer exists."
+        : `This reel already has ${fmtKg(reel.usedBy.totalKg)} kg drawn off it via a job card (lot ${reel.usedBy.lots.join(", ") || "—"}). That usage stays on record; only the reel itself is removed.`;
+      allotWarn.style.display = "block";
+    } else if (reel.allottedTo) {
       allotWarn.textContent = `This reel is allotted to ${reel.allottedTo.lotNo || reel.allottedTo.productCode || "an order"}. Removing it also takes it out of that order's allotment -- the order will need another reel picked in Assign Production.`;
       allotWarn.style.display = "block";
     } else {
